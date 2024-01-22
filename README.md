@@ -1,3 +1,5 @@
 # Dependencies
 
-`pip install pettingzoo 'pettingzoo[classic]'`
+```shell
+pip install pettingzoo 'pettingzoo[classic]'
+```
