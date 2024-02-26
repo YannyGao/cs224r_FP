@@ -60,7 +60,7 @@ class NolimitholdemRound:
         else:
             self.raised = [0 for _ in range(self.num_players)]
 
-    def proceed_round(self, players, action, big_blind):
+    def proceed_round(self, players, action):
         """
         Call functions from other classes to keep one round running
 
@@ -87,8 +87,8 @@ class NolimitholdemRound:
             self.not_raise_num = 1
 
         elif action == Action.RAISE_MIN:
-            self.raised[self.game_pointer] += big_blind
-            player.bet(chips=big_blind)
+            self.raised[self.game_pointer] += self.init_raise_amount
+            player.bet(chips=self.init_raise_amount)
             self.not_raise_num = 1
 
         elif action == Action.RAISE_SMALL:
@@ -141,7 +141,7 @@ class NolimitholdemRound:
 
         return self.game_pointer
 
-    def get_nolimit_legal_actions(self, big_blind, players):
+    def get_nolimit_legal_actions(self, players):
         """
         Obtain the legal actions for the current player
 
