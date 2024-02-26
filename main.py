@@ -7,7 +7,7 @@ def print_obs(obs):
     i = 0
     for item in observation['observation']:
         if i <= 12:
-            print('spades '+str(i)+': '+str(item))
+            print(f'spades {i} : '+str(item))
         elif i <= 25:
             print('hearts '+str(i % 13)+': '+str(item))
         elif i <= 38:
