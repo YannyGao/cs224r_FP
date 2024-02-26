@@ -111,8 +111,8 @@ class NolimitholdemGame(Game):
         Returns:
             (list): A list of legal actions
         """
-        return self.round.get_nolimit_legal_actions(players=self.players)
-
+        return self.round.get_nolimit_legal_actions(self.big_blind, players=self.players)
+        
     def step(self, action):
         """
         Get the next state
@@ -143,7 +143,7 @@ class NolimitholdemGame(Game):
             self.history.append((r, b, r_c, d, p, ps))
 
         # Then we proceed to the next round
-        self.game_pointer = self.round.proceed_round(self.players, action)
+        self.game_pointer = self.round.proceed_round(self.players, action, self.big_blind)
 
         players_in_bypass = [1 if player.status in (PlayerStatus.FOLDED, PlayerStatus.ALLIN) else 0 for player in self.players]
         if self.num_players - sum(players_in_bypass) == 1:

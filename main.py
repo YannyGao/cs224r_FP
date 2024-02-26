@@ -1,7 +1,7 @@
 from pettingzoo.classic import texas_holdem_no_limit_v6
 
-env = texas_holdem_no_limit_v6.env(render_mode="human", num_players=8)
-env.reset(seed=42)
+env = texas_holdem_no_limit_v6.env(render_mode="human", num_players=4)
+env.reset()
 
 def print_obs(obs):
     i = 0
