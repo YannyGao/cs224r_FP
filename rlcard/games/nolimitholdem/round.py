@@ -81,7 +81,8 @@ class NolimitholdemRound:
 
         elif action == Action.ALL_IN:
             all_in_quantity = player.remained_chips
-            self.raised[self.game_pointer] = all_in_quantity + self.raised[self.game_pointer]
+            self.raised[self.game_pointer] = all_in_quantity + \
+                self.raised[self.game_pointer]
             player.bet(chips=all_in_quantity)
 
             self.not_raise_num = 1
@@ -99,7 +100,7 @@ class NolimitholdemRound:
             self.raised[self.game_pointer] += quantity
             player.bet(chips=quantity)
             self.not_raise_num = 1
-        
+
         elif action == Action.RAISE_MED:
             minBet = int((self.dealer.pot / 4) * 3)
             maxBet = int(self.dealer.pot)
@@ -167,33 +168,33 @@ class NolimitholdemRound:
             full_actions.remove(Action.ALL_IN)
         # Even if we can raise, we have to check remained chips
         else:
-            if big_blind > player.remained_chips:
+            if self.init_raise_amount > player.remained_chips:
                 full_actions.remove(Action.RAISE_MIN)
                 full_actions.remove(Action.RAISE_SMALL)
                 full_actions.remove(Action.RAISE_MED)
                 full_actions.remove(Action.RAISE_LARGE)
-            
+
             elif int((self.dealer.pot / 4) * 3) > player.remained_chips:
                 full_actions.remove(Action.RAISE_SMALL)
                 full_actions.remove(Action.RAISE_MED)
                 full_actions.remove(Action.RAISE_LARGE)
-            
+
             elif int(self.dealer.pot) > player.remained_chips:
                 full_actions.remove(Action.RAISE_MED)
                 full_actions.remove(Action.RAISE_LARGE)
-            
+
             # Can't raise if the total raise amount is leq than the max raise amount of this round
             # If raise by pot, there is no such concern
             if Action.RAISE_MIN in full_actions and \
-                big_blind + self.raised[self.game_pointer] <= max(self.raised):
+                    self.init_raise_amount + self.raised[self.game_pointer] <= max(self.raised):
                 full_actions.remove(Action.RAISE_MIN)
-                
+
             if Action.RAISE_SMALL in full_actions and \
-                int((self.dealer.pot / 4) * 3) + self.raised[self.game_pointer] <= max(self.raised):
+                    int((self.dealer.pot / 4) * 3) + self.raised[self.game_pointer] <= max(self.raised):
                 full_actions.remove(Action.RAISE_SMALL)
 
             if Action.RAISE_MED in full_actions and \
-                int(self.dealer.pot) + self.raised[self.game_pointer] <= max(self.raised):
+                    int(self.dealer.pot) + self.raised[self.game_pointer] <= max(self.raised):
                 full_actions.remove(Action.RAISE_MED)
 
         return full_actions
