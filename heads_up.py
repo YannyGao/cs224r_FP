@@ -50,7 +50,8 @@ def generate_episode(rl_agent: Agent):
     print("Rewards:", rewards)
     print()
 
-    # rl_agent.REINFORCE(steps, log_probs, rewards)
+    if(log_probs):
+        rl_agent.REINFORCE(steps, log_probs, rewards)
     return sum(rewards)
 
 
