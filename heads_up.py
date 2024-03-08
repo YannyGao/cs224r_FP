@@ -27,6 +27,8 @@ def generate_episode(rl_agent: Agent):
 
         if termination or truncation:
             action = None
+            if (agent == rl_agent.get_name()):
+                rewards.append(reward)
         else:
             mask = observation[ACTION_MASK]
             if (agent == rl_agent.get_name()):
