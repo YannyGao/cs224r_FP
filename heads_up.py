@@ -1,10 +1,12 @@
 import torch
+import matplotlib.pyplot as plt
+
 from pettingzoo.classic import texas_holdem_no_limit_v6
 from agent import Agent
 from policy import Policy
 from constants import GPU, CPU, OBSERVATION, ACTION_MASK
 
-EPISODE_COUNT = 100000
+EPISODE_COUNT = 10
 
 # TODO: Randomize seed
 SEED = 42
@@ -33,9 +35,7 @@ def generate_episode(rl_agent: Agent):
             mask = observation[ACTION_MASK]
             if (agent == rl_agent.get_name()):
                 # state = observation[OBSERVATION]
-                action, log_prob = rl_agent.get_action(
-                    observation[OBSERVATION], mask)
-
+                action, log_prob = rl_agent.get_action(observation[OBSERVATION], mask)
                 log_probs.append(log_prob)
                 rewards.append(reward)
                 steps += 1
@@ -52,21 +52,20 @@ def generate_episode(rl_agent: Agent):
 def main():
     device = torch.device(GPU if torch.cuda.is_available() else CPU)
     print(f"Training using {device}")
+    scores = []
+    episodes = []
     policy = Policy()
     agent = Agent(0.01, 0.99, policy)
-    win = 0
-    loss = 0
-    draw = 0
     for i in range(EPISODE_COUNT):
         score = generate_episode(agent)
-        if score > 0:
-            win += 1
-        elif score < 0:
-            loss += 1
-        else:
-            draw += 1
-    print(f"Win: {win}    Draw: {draw}    Loss: {loss}")
-
+        scores.append(score)
+        episodes.append(i)
+        print("SCORE EP ", i, ": ", score)
+    plt.plot(episodes, scores)
+    plt.xlabel('episode #')
+    plt.ylabel('score')
+    plt.title('Poker')
+    plt.show()
 
 if __name__ == "__main__":
     main()
