@@ -19,8 +19,8 @@ class Agent:
     def get_name(self):
         return self._name
 
-    def get_action(self, actions):
-        return self._theta.act(actions)
+    def get_action(self, state, mask):
+        return self._theta.act(state, mask)
 
     def REINFORCE(self, T: int, log_probs, rewards) -> None:
         returns = deque(maxlen=T)

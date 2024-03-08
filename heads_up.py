@@ -31,7 +31,7 @@ def generate_episode(rl_agent: Agent):
             mask = observation[ACTION_MASK]
             if (agent == rl_agent.get_name()):
                 # state = observation[OBSERVATION]
-                action, log_prob = rl_agent.get_action(mask)
+                action, log_prob = rl_agent.get_action(observation[OBSERVATION], mask)
 
                 log_probs.append(log_prob)
                 rewards.append(reward)
