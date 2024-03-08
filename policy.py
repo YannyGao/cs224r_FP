@@ -16,11 +16,8 @@ class Policy(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.fc1(x)
-        print("X1: ", x)
         x = F.relu(x)
-        print("X2: ", x)
         x = self.fc2(x)
-        print("X3: ", x)
         return F.softmax(x, dim=1)
 
     def act(self, state, mask) -> tuple:
@@ -29,6 +26,6 @@ class Policy(nn.Module):
         probs = self.forward(state).cpu()
         m = Categorical(probs)
         action = m.sample()
-        while(mask[action] == 0):
+        while (mask[action] == 0):
             action = m.sample()
         return (action.item(), m.log_prob(action))

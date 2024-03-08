@@ -4,7 +4,7 @@ from agent import Agent
 from policy import Policy
 from constants import GPU, CPU, OBSERVATION, ACTION_MASK
 
-EPISODE_COUNT = 10
+EPISODE_COUNT = 100000
 
 # TODO: Randomize seed
 SEED = 42
@@ -33,7 +33,8 @@ def generate_episode(rl_agent: Agent):
             mask = observation[ACTION_MASK]
             if (agent == rl_agent.get_name()):
                 # state = observation[OBSERVATION]
-                action, log_prob = rl_agent.get_action(observation[OBSERVATION], mask)
+                action, log_prob = rl_agent.get_action(
+                    observation[OBSERVATION], mask)
 
                 log_probs.append(log_prob)
                 rewards.append(reward)
@@ -43,14 +44,7 @@ def generate_episode(rl_agent: Agent):
         env.step(action)
     env.close()
 
-    print("EPISODE END")
-    print("===========")
-    print("Steps:", steps)
-    print("Log probs:", log_probs)
-    print("Rewards:", rewards)
-    print()
-
-    if(log_probs):
+    if (log_probs):
         rl_agent.REINFORCE(steps, log_probs, rewards)
     return sum(rewards)
 
@@ -60,10 +54,18 @@ def main():
     print(f"Training using {device}")
     policy = Policy()
     agent = Agent(0.01, 0.99, policy)
+    win = 0
+    loss = 0
+    draw = 0
     for i in range(EPISODE_COUNT):
         score = generate_episode(agent)
-        print(f"SCORE: {score}")
-        print()
+        if score > 0:
+            win += 1
+        elif score < 0:
+            loss += 1
+        else:
+            draw += 1
+    print(f"Win: {win}    Draw: {draw}    Loss: {loss}")
 
 
 if __name__ == "__main__":

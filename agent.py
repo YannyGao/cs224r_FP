@@ -28,12 +28,9 @@ class Agent:
             G_t = returns[0] if len(returns) > 0 else 0
             returns.appendleft(self._gamma * G_t + rewards[t])
         eps = np.finfo(np.float32).eps.item()
-        print("EPS: ", eps)
-        print("RETURNS1: ", returns)
         returns = torch.tensor(returns)
         if len(list(returns.size())) > 1:
             returns = (returns - returns.mean()) / (returns.std() + eps)
-        print("RETURNS2: ", returns)
 
         policy_loss = []
         for log_probs, G in zip(log_probs, returns):
