@@ -14,7 +14,7 @@ class Agent:
         self._gamma = gamma
         self._theta = theta
 
-        self._optimizer = optim.Adam(self._theta.parameters(), lr=1e-2)
+        self._optimizer = optim.Adam(self._theta.parameters(), lr=self._alpha)
 
     def get_name(self):
         return self._name
@@ -22,9 +22,9 @@ class Agent:
     def get_action(self, state, mask):
         return self._theta.act(state, mask)
 
-    def REINFORCE(self, T: int, log_probs, rewards) -> None:
-        returns = deque(maxlen=T)
-        for t in reversed(range(T)):
+    def REINFORCE(self, log_probs, rewards) -> None:
+        returns = deque()
+        for t in reversed(range(len(rewards))):
             G_t = returns[0] if len(returns) > 0 else 0
             returns.appendleft(self._gamma * G_t + rewards[t])
         eps = np.finfo(np.float32).eps.item()
@@ -33,8 +33,8 @@ class Agent:
             returns = (returns - returns.mean()) / (returns.std() + eps)
 
         policy_loss = []
-        for log_probs, G in zip(log_probs, returns):
-            policy_loss.append(-log_probs * G)
+        for log_prob, G_t in zip(log_probs, returns):
+            policy_loss.append(-log_prob * G_t)
         policy_loss = torch.cat(policy_loss).sum()
 
         self._optimizer.zero_grad()

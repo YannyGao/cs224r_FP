@@ -1,28 +1,22 @@
 import torch
-import matplotlib.pyplot as plt
 
 from pettingzoo.classic import texas_holdem_no_limit_v6
 from agent import Agent
 from policy import Policy
-from constants import GPU, CPU, OBSERVATION, ACTION_MASK
+from constants import EPISODES, GPU, CPU, OBSERVATION, ACTION_MASK, ACTION_SPACE_SIZE
+from plot import plot_graph, plot_hist
 
-EPISODE_COUNT = 10
-
-# TODO: Randomize seed
-SEED = 42
 
 # RENDER_MODE = "human"
 RENDER_MODE = "rgb_array"
 
 
-def generate_episode(rl_agent: Agent):
+def generate_episode(rl_agent: Agent, action_data_ptr: list[int]):
     env = texas_holdem_no_limit_v6.env(render_mode=RENDER_MODE)
-    env.reset(seed=SEED)
-    torch.manual_seed(SEED)
+    env.reset()
 
     log_probs = []
     rewards = []
-    steps = 0
 
     for agent in env.agent_iter():
         observation, reward, termination, truncation, _ = env.last()
@@ -34,38 +28,47 @@ def generate_episode(rl_agent: Agent):
         else:
             mask = observation[ACTION_MASK]
             if (agent == rl_agent.get_name()):
-                # state = observation[OBSERVATION]
-                action, log_prob = rl_agent.get_action(observation[OBSERVATION], mask)
+                state = observation[OBSERVATION]
+                action, log_prob = rl_agent.get_action(state, mask)
+                action_data_ptr.append(action)
                 log_probs.append(log_prob)
                 rewards.append(reward)
-                steps += 1
             else:
                 action = env.action_space(agent).sample(mask)
         env.step(action)
     env.close()
 
     if (log_probs):
-        rl_agent.REINFORCE(steps, log_probs, rewards)
+        rl_agent.REINFORCE(log_probs, rewards)
+
     return sum(rewards)
 
 
 def main():
     device = torch.device(GPU if torch.cuda.is_available() else CPU)
     print(f"Training using {device}")
-    scores = []
+
     episodes = []
-    policy = Policy()
-    agent = Agent(0.01, 0.99, policy)
-    for i in range(EPISODE_COUNT):
-        score = generate_episode(agent)
+    scores = []
+    action_data = []
+
+    agent = Agent(0.01, 0.99, Policy())
+
+    for episode in range(EPISODES):
+        score = generate_episode(agent, action_data)
+        print(f"EPISODE {episode}: {score}")
         scores.append(score)
-        episodes.append(i)
-        print("SCORE EP ", i, ": ", score)
-    plt.plot(episodes, scores)
-    plt.xlabel('episode #')
-    plt.ylabel('score')
-    plt.title('Poker')
-    plt.show()
+        episodes.append(episode + 1)
+
+    plot_hist(action_data, ACTION_SPACE_SIZE)
+    plot_graph(
+        'No-limit Texas Hold\'em: Score over episode',
+        "Episode",
+        episodes,
+        "Score",
+        scores
+    )
+
 
 if __name__ == "__main__":
     main()
