@@ -26,6 +26,10 @@ class Policy(nn.Module):
         probs = self.forward(state).cpu()
         m = Categorical(probs)
         action = m.sample()
-        while (mask[action] == 0):
-            action = m.sample()
+        print("act: ", action)
+        if mask[action] == 0:
+            action = np.random.randint(0,len(mask)-1)
+            while(mask[action] == 0):
+                action = np.random.randint(0,len(mask)-1)
+            action = torch.tensor(action)
         return (action.item(), m.log_prob(action))
