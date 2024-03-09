@@ -1,16 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Categorical
-
-from constants import CPU
-
-
-class CategoricalMasked(Categorical):
-    def __init__(self, logits: torch.Tensor, mask: torch.Tensor) -> None:
-        ninf = torch.tensor(torch.finfo(logits.dtype).min, dtype=logits.dtype)
-        logits = torch.where(mask, logits, ninf)
-        super(CategoricalMasked, self).__init__(logits=logits)
 
 
 class Policy(nn.Module):
@@ -24,10 +14,3 @@ class Policy(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         return self.fc3(x)
-
-    def act(self, state, mask: list[int]):
-        state = torch.from_numpy(state).float().unsqueeze(0).to(CPU)
-        logits = self.forward(state).cpu()
-        m = CategoricalMasked(logits, torch.tensor(mask, dtype=torch.bool))
-        action = m.sample()
-        return action.item(), m.log_prob(action)

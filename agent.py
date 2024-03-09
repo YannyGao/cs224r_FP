@@ -2,7 +2,8 @@ import numpy as np
 import torch
 from torch import optim
 from collections import deque
-from constants import DEFAULT_AGENT_NAME
+from constants import DEFAULT_AGENT_NAME, CPU
+from distribution import CategoricalMasked
 from policy import Policy
 
 
@@ -14,21 +15,26 @@ class Agent:
         self._gamma = gamma
         self._theta = theta
 
-        self._optimizer = optim.Adam(self._theta.parameters(), lr=self._alpha)
+        self._optimizer = optim.AdamW(self._theta.parameters(), lr=self._alpha)
 
-    def get_name(self):
+    def get_name(self) -> str:
         return self._name
 
     def get_action(self, state, mask):
-        return self._theta.act(state, mask)
+        state = torch.from_numpy(state).float().unsqueeze(0).to(CPU)
+        logits = self._theta(state)
+        m = CategoricalMasked(logits, torch.tensor(mask, dtype=torch.bool))
+        action = m.sample()
+        return action.item(), m.log_prob(action)
 
     def REINFORCE(self, log_probs, rewards) -> None:
         returns = deque()
-        for t in reversed(range(len(rewards))):
+        for R_t in reversed(rewards):
             G_t = returns[0] if len(returns) > 0 else 0
-            returns.appendleft(self._gamma * G_t + rewards[t])
-        eps = np.finfo(np.float32).eps.item()
+            returns.appendleft(self._gamma * G_t + R_t)
         returns = torch.tensor(returns)
+
+        eps = np.finfo(np.float32).eps.item()
         if len(list(returns.size())) > 1:
             returns = (returns - returns.mean()) / (returns.std() + eps)
 
