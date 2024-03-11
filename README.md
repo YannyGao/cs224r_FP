@@ -1,5 +1,5 @@
 # Dependencies
 
 ```shell
-pip install pettingzoo 'pettingzoo[classic]' torch matplotlib
+pip install pettingzoo 'pettingzoo[classic]' rlcard torch numpy matplotlib
 ```
