@@ -10,6 +10,10 @@ from opponent_model import OpponentModel
 from opponent_tracker import OpponentTracker
 from poker_score import decode_cards, estimate_bluff_score
 from deception_reward import compute_deception_reward
+from curriculum_opponents import curriculum_schedule, select_opponent
+from baseline_agent import BaselineAgent  # Since we moved it out
+
+
 
 # === Constants ===
 OBSERVATION_SPACE_SIZE = 54
@@ -97,15 +101,21 @@ class BaselineAgent:
 def train_bluffing_baseline(episodes=10000):
     env = texas_holdem_no_limit_v6.env(render_mode="ansi", num_players=2)
     agent = BaselineAgent()
-    opponent = BaselineAgent()
+    curriculum = curriculum_schedule()
+
+    # 🛠️ Initialize opponent modeling components
     opponent_model = OpponentModel(OBSERVATION_SPACE_SIZE, 32, ACTION_SPACE_SIZE)
     tracker = OpponentTracker(opponent_model)
 
+
     for ep in range(1, episodes + 1):
+        opponent = select_opponent(ep, curriculum)  # ← moved inside loop
+
         env.reset()
-        log_probs, values = [], []
-        actions_this_game, states_this_game = [], []
+        log_probs, rewards, values = [], [], []
         episode_reward = 0
+        actions_this_game = []
+        states_this_game = []
 
         for name in env.agent_iter():
             obs, rew, term, trunc, _ = env.last()
