@@ -10,11 +10,9 @@ from policy import Policy
 class Agent:
     def __init__(self, alpha: float, gamma: float, theta: Policy, name=DEFAULT_AGENT_NAME) -> None:
         self._name = name
-
         self._alpha = alpha
         self._gamma = gamma
         self._theta = theta
-
         self._optimizer = optim.AdamW(self._theta.parameters(), lr=self._alpha)
 
     def get_name(self) -> str:
