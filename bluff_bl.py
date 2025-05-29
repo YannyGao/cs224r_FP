@@ -9,6 +9,9 @@ from pettingzoo.classic import texas_holdem_no_limit_v6
 # And these are for opponent modeling
 from opponent_model import OpponentModel
 from opponent_tracker import OpponentTracker
+from treys import Deck, Evaluator, Card
+import random
+
 
 # Constants
 OBSERVATION_SPACE_SIZE = 54
@@ -16,6 +19,53 @@ ACTION_SPACE_SIZE = 5
 HIDDEN_LAYER_SIZE = 32
 CPU = "cpu"
 
+# PettingZoo action map: Action Index	Meaning
+            # 0	Fold
+            # 1	Call / Check
+            # 2	Raise Half Pot
+            # 3	Raise Pot
+            # 4	All-In
+
+# Evaluate poker hands
+evaluator = Evaluator()
+
+def index_to_card(index):
+    suits = ['s', 'h', 'd', 'c']  # spades, hearts, diamonds, clubs
+    ranks = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A']
+    if 0 <= index < 52:
+        rank = ranks[index % 13]
+        suit = suits[index // 13]
+        return rank + suit
+    return None
+
+def decode_cards(obs):
+    """
+    Extracts hole cards from the one-hot encoded 52-card vector in obs.
+    Assumes the first 52 elements of obs are a one-hot for the full deck.
+    """
+    one_hot = obs[:52]
+    indices = [i for i, val in enumerate(one_hot) if val == 1.0]
+    cards = [index_to_card(i) for i in indices]
+    return [Card.new(c) for c in cards if c is not None]
+
+
+def estimate_bluff_score(hole_cards, community_cards, num_simulations=20):
+    wins = 0
+    for _ in range(num_simulations):
+        deck = Deck()
+        used = set(hole_cards + community_cards)
+        for c in used:
+            deck.cards.remove(c)
+
+        remaining = 5 - len(community_cards)
+        board = community_cards + deck.draw(remaining)
+        opponent = deck.draw(2)
+
+        my_score = evaluator.evaluate(board, hole_cards)
+        opp_score = evaluator.evaluate(board, opponent)
+        if my_score < opp_score:
+            wins += 1
+    return wins / num_simulations
 
 class PolicyWithValue(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_dim):
@@ -52,19 +102,37 @@ class BaselineAgent:
         else:
             masked_probs /= sum_probs
 
-        # predict opponent's likely action
-        if opponent_model and opponent_obs is not None:
-            opponent_obs_tensor = torch.tensor(opponent_obs, dtype=torch.float32).unsqueeze(0)
-            opponent_pred = opponent_model(opponent_obs_tensor).squeeze()
-            likely_action = torch.argmax(opponent_pred).item()
-            
-            #  if opponent is likely to fold (say action 0), consider bluffing - idk but this is part of the strategy that we should experiment? 
-            if likely_action == 0 and mask[2] == 1:
-                return 2, torch.log(masked_probs[2]), value.squeeze()
+        # --- Evaluator-based bluff override logic ---
+        try:
+            hole_cards = decode_cards(obs)  # extract hand
+            community_cards = []  # TEMP: set if your env gives these
+            bluff_score = estimate_bluff_score(hole_cards, community_cards)
 
+            if bluff_score > 0.8:
+                aggr_actions = [i for i in [4, 3, 2] if mask[i] == 1]
+                if aggr_actions:
+                    probs = torch.tensor([bluff_score**(4 - i) for i in aggr_actions])  # weight: more likely to choose smaller raises
+                    probs /= probs.sum()
+                    choice = torch.multinomial(probs, 1).item()
+                    action = aggr_actions[choice]
+                    print(f"[Bluff Override] bluff_score={bluff_score:.2f} → sampled aggressive action {action}")
+                    return action, torch.log(masked_probs[action]), value.squeeze()
+        except Exception as e:
+            pass
+
+        # -- Default policy sampling --
         action_dist = torch.distributions.Categorical(masked_probs)
         action = action_dist.sample()
         return action.item(), action_dist.log_prob(action), value.squeeze()
+        # # predict opponent's likely action
+        # if opponent_model and opponent_obs is not None:
+        #     opponent_obs_tensor = torch.tensor(opponent_obs, dtype=torch.float32).unsqueeze(0)
+        #     opponent_pred = opponent_model(opponent_obs_tensor).squeeze()
+        #     likely_action = torch.argmax(opponent_pred).item()
+            
+        #     #  if opponent is likely to fold (say action 0), consider bluffing - idk but this is part of the strategy that we should experiment? 
+        #     if likely_action == 0 and mask[2] == 1:
+        #         return 2, torch.log(masked_probs[2]), value.squeeze()
 
     def update(self, log_probs, values, rewards):
         returns = []
