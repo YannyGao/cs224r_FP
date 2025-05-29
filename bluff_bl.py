@@ -40,13 +40,23 @@ def index_to_card(index):
 
 def decode_cards(obs):
     """
-    Extracts hole cards from the one-hot encoded 52-card vector in obs.
-    Assumes the first 52 elements of obs are a one-hot for the full deck.
+    Returns (hole_cards, community_cards) based on the 52-length one-hot card encoding.
+    Assumes hole cards are always 2 cards, rest are community cards.
     """
     one_hot = obs[:52]
     indices = [i for i, val in enumerate(one_hot) if val == 1.0]
-    cards = [index_to_card(i) for i in indices]
-    return [Card.new(c) for c in cards if c is not None]
+    cards = []
+    for i in indices:
+        card_str = index_to_card(i)
+        if card_str is not None:
+            try:
+                cards.append(Card.new(card_str))
+            except Exception as e:
+                print(f"[Card Conversion Error] Index {i} → {card_str}: {e}")
+    
+    hole_cards = cards[:2]
+    community_cards = cards[2:]
+    return hole_cards, community_cards
 
 
 def estimate_bluff_score(hole_cards, community_cards, num_simulations=20):
@@ -103,22 +113,24 @@ class BaselineAgent:
             masked_probs /= sum_probs
 
         # --- Evaluator-based bluff override logic ---
+        # --- Evaluator-based bluff override logic ---
         try:
-            hole_cards = decode_cards(obs)  # extract hand
-            community_cards = []  # TEMP: set if your env gives these
+            hole_cards, community_cards = decode_cards(obs)
             bluff_score = estimate_bluff_score(hole_cards, community_cards)
 
             if bluff_score > 0.8:
                 aggr_actions = [i for i in [4, 3, 2] if mask[i] == 1]
                 if aggr_actions:
-                    probs = torch.tensor([bluff_score**(4 - i) for i in aggr_actions])  # weight: more likely to choose smaller raises
+                    probs = torch.tensor([bluff_score**(4 - i) for i in aggr_actions])
                     probs /= probs.sum()
                     choice = torch.multinomial(probs, 1).item()
                     action = aggr_actions[choice]
                     print(f"[Bluff Override] bluff_score={bluff_score:.2f} → sampled aggressive action {action}")
                     return action, torch.log(masked_probs[action]), value.squeeze()
+
         except Exception as e:
-            pass
+            print(f"[Bluff Override Error] {e}")  # Optional: add this if you want to catch rare errors
+
 
         # -- Default policy sampling --
         action_dist = torch.distributions.Categorical(masked_probs)
