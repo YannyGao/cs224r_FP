@@ -8,11 +8,15 @@ from collections import deque, Counter
 from pettingzoo.classic import texas_holdem_no_limit_v6
 from deception_reward import compute_deception_reward
 from poker_score import decode_cards, estimate_bluff_score
+from collections import Counter, defaultdict
 # And these are for opponent modeling
 from opponent_tracker_simp import OpponentModel, OpponentTracker
 from treys import Deck, Evaluator, Card
 import random
 
+from torch.utils.tensorboard import SummaryWriter
+
+import os
 
 # Constants
 NUM_PLAYERS = 2
@@ -170,23 +174,75 @@ class BaselineAgent:
         self.optimizer.zero_grad()
         total_loss.backward()
         self.optimizer.step()
+        
+# === Opponent Definitions ===
+class WeakOpponent:
+    def get_action(self, obs, mask):
+        valid_actions = [i for i, m in enumerate(mask) if m == 1]
+        action = random.choice(valid_actions) if valid_actions else 0
+        return action, torch.tensor(0.0), torch.tensor(0.0)
+
+class MediumOpponent:
+    def __init__(self, base_agent):
+        self.agent = base_agent
+
+    def get_action(self, obs, mask):
+        return self.agent.get_action(obs, mask)
+
+class StrongOpponent:
+    def __init__(self, base_agent):
+        self.agent = base_agent
+
+    def get_action(self, obs, mask):
+        return self.agent.get_action(obs, mask)
+
+# === Adaptive Curriculum ===
+trained_medium_agent = BaselineAgent()
+trained_strong_agent = BaselineAgent()
+
+def adaptive_opponent_selection(ep, win_loss_stats):
+    if win_loss_stats["WeakOpponent"]["games"] < 200:
+        return WeakOpponent()
+
+    weak_wr = win_loss_stats["WeakOpponent"]["wins"] / max(1, win_loss_stats["WeakOpponent"]["games"])
+    medium_wr = win_loss_stats["MediumOpponent"]["wins"] / max(1, win_loss_stats["MediumOpponent"]["games"])
+
+    if weak_wr > 0.75 and win_loss_stats["MediumOpponent"]["games"] < 200:
+        return MediumOpponent(trained_medium_agent)
+
+    if medium_wr > 0.72 and win_loss_stats["StrongOpponent"]["games"] < 200:
+        return StrongOpponent(trained_strong_agent)
+
+    if medium_wr > 0.60:
+        return MediumOpponent(trained_medium_agent)
+
+    return WeakOpponent()
 
 def train_bluffing_baseline(episodes=10000):
     
     env = texas_holdem_no_limit_v6.env(render_mode="ansi", num_players=NUM_PLAYERS)
     agent = BaselineAgent()
-    opponent = BaselineAgent()
+    
     opponent_models = []
     # for i in range(NUM_PLAYERS):
     #     opponent_model = OpponentModel(OBSERVATION_SPACE_SIZE, 32, ACTION_SPACE_SIZE)
     #     opponent_models.append(opponent_model)
     opponent_model =  OpponentModel(OBSERVATION_SPACE_SIZE - NUM_PLAYERS + 1, 32, ACTION_SPACE_SIZE)
     tracker = OpponentTracker(opponent_model)
+    win_loss_stats = defaultdict(lambda: {"wins": 0, "losses": 0, "games": 0})
 
+    writer = SummaryWriter(log_dir="runs/bluffing_baseline")
     for ep in range(1, episodes + 1):
+        opponent = adaptive_opponent_selection(ep, win_loss_stats)
         env.reset()
-        log_probs, rewards, values = [], [], []
         episode_reward = 0
+        log_probs, values = [], []
+        opponent_obs_history = []
+
+        actions_this_game, states_this_game = [], []
+
+        step_rewards, deception_rewards = [], []
+
         actions_this_game = []
         opponent_obs_history = []
         states_this_game = []
@@ -216,9 +272,19 @@ def train_bluffing_baseline(episodes=10000):
 
                     else:
                         opponent_obs_seq = None
-
+                    hole_cards, community_cards = decode_cards(state)
+                    bluff_score = estimate_bluff_score(hole_cards, community_cards)
                     action, log_prob, value = agent.get_action(state, mask, opponent_model, opponent_obs_seq)
+                    
+                    if bluff_score < 0.25 and action in [3, 4]:
+                        rew += 0.2
+                    step_rewards.append(rew)
 
+                    deception_rewards.append(
+
+                    compute_deception_reward(obs=state, action=action, final_reward=rew)
+
+                )
                     log_probs.append(log_prob)
                     values.append(value)
                     actions_this_game.append(action)
@@ -230,7 +296,7 @@ def train_bluffing_baseline(episodes=10000):
                     opponent_obs_history.append(state)
   # store for use by player_0
 
-                env.step(action)
+                
 
                 # track only opponent actions (name is player_1)
                 if name == "player_1":
@@ -243,22 +309,57 @@ def train_bluffing_baseline(episodes=10000):
                         if ep % 1000 == 0:
                             print(f"Episode {ep}: Opponent model loss = {loss['total_loss']:.4f}")
                     tracker.reset()
-
-                  
             if name == "player_0":
                 episode_reward += rew
-              
+            env.step(action)
+            
         if log_probs:
-            deception_bonus = sum(
-                compute_deception_reward(obs=state, action=act, final_reward=episode_reward)
-                for state, act in zip(states_this_game, actions_this_game)
-            )
-            if deception_bonus > 0:
-                print(f"[Ep {ep}] Deception Bonus: +{deception_bonus:.2f}")
-            episode_reward += deception_bonus
-            agent.update(log_probs, values, [episode_reward] * len(log_probs))
+            total_deception = sum(deception_rewards)
+            if total_deception > 0:
+                print(f"[Ep {ep}] Deception Bonus: +{total_deception:.2f}")
+            combined_rewards = [r + d for r, d in zip(step_rewards, deception_rewards)]
+            agent.update(log_probs, values, combined_rewards)
+            if isinstance(opponent, MediumOpponent):
+                opponent.agent.update(log_probs, values, combined_rewards)
+
+            if isinstance(opponent, StrongOpponent):
+                opponent.agent.update(log_probs, values, combined_rewards)
 
 
+        # === Win/loss tracking using true rewards ===
+        opp_name = type(opponent).__name__
+        win_loss_stats[opp_name]["games"] += 1
+        final_rewards = env.rewards
+        r0 = final_rewards.get("player_0", 0)
+        r1 = final_rewards.get("player_1", 0)
+        if r0 > r1:
+            win_loss_stats[opp_name]["wins"] += 1
+        else:
+            win_loss_stats[opp_name]["losses"] += 1
+
+        # === TensorBoard Logging ===
+        total_reward = sum(step_rewards) + sum(deception_rewards)
+        writer.add_scalar("Reward/Total", total_reward, ep)
+        writer.add_scalar("Deception/Bonus", total_deception, ep)
+        if states_this_game:
+            bluff_avg = np.mean([s[-1] for s in states_this_game])
+            writer.add_scalar("Bluff/AverageScore", bluff_avg, ep)
+        for name, stats in win_loss_stats.items():
+            if stats["games"] > 0:
+                winrate = stats["wins"] / stats["games"]
+                writer.add_scalar(f"WinRate/{name}", winrate, ep)
+
+        # === Console Logging ===
+        if ep % 1000 == 0:
+            action_summary = Counter(a for a in actions_this_game if a != 0)
+            print(f"Ep {ep}: Reward = {total_reward:.1f}, Actions = {action_summary}")
+            print(f"[Stats @ Ep {ep}]")
+            for opp, stats in win_loss_stats.items():
+                w, l, g = stats["wins"], stats["losses"], stats["games"]
+                winrate = w / g if g > 0 else 0.0
+                print(f"{opp}: {w}W-{l}L ({winrate:.2%} win rate over {g} games)")
+
+    writer.close()
 if __name__ == "__main__":
     print("started")
     train_bluffing_baseline(episodes=10000)
