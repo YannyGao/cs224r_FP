@@ -6,12 +6,12 @@ import numpy as np
 from collections import deque
 from typing import List, Tuple, Optional, Dict
 import math
-from temporal_opponent_model import TemporalOpponentModel
-class TemporalOpponentTracker:
+from temporal_opponent_model import OpponentModel
+class OpponentTracker:
     """
     Enhanced opponent tracker with temporal sequence management
     """
-    def __init__(self, model: TemporalOpponentModel, lr: float = 1e-3, 
+    def __init__(self, model: OpponentModel, lr: float = 1e-3, 
                  sequence_length: int = 20, buffer_size: int = 1000):
         self.model = model
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-5)
@@ -188,10 +188,8 @@ class TemporalOpponentTracker:
         for seq_idx in batch_sequences:
             sequence = self.sequence_buffer[seq_idx]
             
-            # Prepare input sequence
             obs_sequence = torch.stack([obs['obs'] for obs in sequence]).unsqueeze(0)  # [1, seq_len, obs_dim]
-            
-            # Get model predictions
+            print(obs_sequence.shape)
             predictions = self.model(obs_sequence)
             
             # Compute labels
