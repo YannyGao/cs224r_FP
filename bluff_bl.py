@@ -1,19 +1,16 @@
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torch import optim
-from collections import Counter
+from collections import Counter, defaultdict
 from pettingzoo.classic import texas_holdem_no_limit_v6
 
 from opponent_model import OpponentModel
 from opponent_tracker import OpponentTracker
 from poker_score import decode_cards, estimate_bluff_score
 from deception_reward import compute_deception_reward
-from curriculum_opponents import curriculum_schedule, select_opponent
-from baseline_agent import BaselineAgent  # Since we moved it out
-
-
 
 # === Constants ===
 OBSERVATION_SPACE_SIZE = 54
@@ -97,25 +94,49 @@ class BaselineAgent:
         loss.backward()
         self.optimizer.step()
 
+# === Opponent Definitions ===
+class WeakOpponent:
+    def get_action(self, obs, mask):
+        valid_actions = [i for i, m in enumerate(mask) if m == 1]
+        action = random.choice(valid_actions) if valid_actions else 0
+        return action, torch.tensor(0.0), torch.tensor(0.0)
+
+class MediumOpponent:
+    def __init__(self, base_agent):
+        self.agent = base_agent
+
+    def get_action(self, obs, mask):
+        return self.agent.get_action(obs, mask)
+
+# === Adaptive Curriculum ===
+def adaptive_opponent_selection(ep, win_loss_stats):
+    if win_loss_stats["WeakOpponent"]["games"] < 200:
+        return WeakOpponent()
+
+    weak_wr = win_loss_stats["WeakOpponent"]["wins"] / max(1, win_loss_stats["WeakOpponent"]["games"])
+    if weak_wr > 0.75 and win_loss_stats["MediumOpponent"]["games"] < 200:
+        return MediumOpponent(BaselineAgent())
+
+    medium_wr = win_loss_stats["MediumOpponent"]["wins"] / max(1, win_loss_stats["MediumOpponent"]["games"])
+    if medium_wr > 0.75:
+        return MediumOpponent(BaselineAgent())  # You can add StrongOpponent here later
+
+    return MediumOpponent(BaselineAgent())
+
 # === Training Loop ===
 def train_bluffing_baseline(episodes=10000):
     env = texas_holdem_no_limit_v6.env(render_mode="ansi", num_players=2)
     agent = BaselineAgent()
-    curriculum = curriculum_schedule()
-
-    # 🛠️ Initialize opponent modeling components
     opponent_model = OpponentModel(OBSERVATION_SPACE_SIZE, 32, ACTION_SPACE_SIZE)
     tracker = OpponentTracker(opponent_model)
-
+    win_loss_stats = defaultdict(lambda: {"wins": 0, "losses": 0, "games": 0})
 
     for ep in range(1, episodes + 1):
-        opponent = select_opponent(ep, curriculum)  # ← moved inside loop
-
+        opponent = adaptive_opponent_selection(ep, win_loss_stats)
         env.reset()
-        log_probs, rewards, values = [], [], []
+        log_probs, values = [], []
+        actions_this_game, states_this_game = [], []
         episode_reward = 0
-        actions_this_game = []
-        states_this_game = []
 
         for name in env.agent_iter():
             obs, rew, term, trunc, _ = env.last()
@@ -145,7 +166,7 @@ def train_bluffing_baseline(episodes=10000):
 
             env.step(action)
 
-        # === Deception-aware shaping ===
+        # === Deception-aware shaping + Update ===
         if log_probs:
             deception_bonus = sum(
                 compute_deception_reward(obs=state, action=act, final_reward=episode_reward)
@@ -156,12 +177,24 @@ def train_bluffing_baseline(episodes=10000):
             episode_reward += deception_bonus
             agent.update(log_probs, values, [episode_reward] * len(log_probs))
 
+        # === Win/loss tracking ===
+        opp_name = type(opponent).__name__
+        win_loss_stats[opp_name]["games"] += 1
+        if episode_reward > 0:
+            win_loss_stats[opp_name]["wins"] += 1
+        else:
+            win_loss_stats[opp_name]["losses"] += 1
+
         # === Logging ===
         if ep % 1000 == 0:
             action_summary = Counter(a for a in actions_this_game if a != 0)
-            if action_summary:
-                print(f"Ep {ep}: Reward = {episode_reward:.1f}, Actions = {action_summary}")
+            print(f"Ep {ep}: Reward = {episode_reward:.1f}, Actions = {action_summary}")
+            print(f"[Stats @ Ep {ep}]")
+            for opp, stats in win_loss_stats.items():
+                w, l, g = stats["wins"], stats["losses"], stats["games"]
+                winrate = w / g if g > 0 else 0.0
+                print(f"{opp}: {w}W-{l}L ({winrate:.2%} win rate over {g} games)")
 
 if __name__ == "__main__":
-    print("Training bluffing agent...")
+    print("Training bluffing agent with adaptive curriculum...")
     train_bluffing_baseline(episodes=10000)
