@@ -22,15 +22,15 @@ class OpponentModel(nn.Module):
         x: Tensor of shape (batch_size, seq_len, input_dim)
         src_key_padding_mask: Optional mask for padding tokens (batch_size, seq_len), bool tensor
         """
-        print(x.shape)
+
         x = self.input_proj(x)  # (batch, seq_len, hidden_dim)
-        print(x.shape)
+     
         # x = x.transpose(0, 1)
-        print(x.shape)
+  
         enc_out = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # (seq_len, batch, hidden_dim)
         
         last_hidden = enc_out[:, -1, :] # (batch, hidden_dim)
-        print(last_hidden.shape)
+    
         action_logits = self.action_head(last_hidden)  # (batch, num_actions)
         hand_strength = torch.sigmoid(self.hand_strength_head(last_hidden)).squeeze(-1)  # (batch,)
         aggression = torch.sigmoid(self.aggression_head(last_hidden)).squeeze(-1)
@@ -107,8 +107,10 @@ class OpponentTracker:
           - 'confidence': tensor (batch,) float
           - 'padding_mask': optional bool tensor (batch, seq_len), True for padding tokens
         """
+        
         self.model.train()
         obs = batch['observations'].to(self.device)
+      
         actions = batch['actions'].to(self.device)
         hand_strength = batch['hand_strength'].to(self.device)
         aggression = batch['aggression'].to(self.device)
