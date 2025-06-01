@@ -30,7 +30,6 @@ class PolicyWithValue(nn.Module):
         x = F.relu(self.fc2(x))
         return self.policy_head(x), self.value_head(x)
 
-# === Agent Definition ===
 class BaselineAgent:
     def __init__(self, alpha=0.01, gamma=0.99):
         self.gamma = gamma
