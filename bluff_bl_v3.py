@@ -219,109 +219,94 @@ def adaptive_opponent_selection(ep, win_loss_stats):
     return WeakOpponent()
 
 def train_bluffing_baseline(episodes=10000):
-    
     env = texas_holdem_no_limit_v6.env(render_mode="ansi", num_players=NUM_PLAYERS)
     agent = BaselineAgent()
     
-    opponent_models = []
-    # for i in range(NUM_PLAYERS):
-    #     opponent_model = OpponentModel(OBSERVATION_SPACE_SIZE, 32, ACTION_SPACE_SIZE)
-    #     opponent_models.append(opponent_model)
-    opponent_model =  OpponentModel(OBSERVATION_SPACE_SIZE - NUM_PLAYERS + 1, 32, ACTION_SPACE_SIZE)
+    opponent_model = OpponentModel(OBSERVATION_SPACE_SIZE - NUM_PLAYERS + 1, 32, ACTION_SPACE_SIZE)
     tracker = OpponentTracker(opponent_model)
     win_loss_stats = defaultdict(lambda: {"wins": 0, "losses": 0, "games": 0})
 
     writer = SummaryWriter(log_dir="runs/bluffing_baseline")
+
     for ep in range(1, episodes + 1):
         opponent = adaptive_opponent_selection(ep, win_loss_stats)
         env.reset()
-   
+
         log_probs, values = [], []
-        opponent_obs_history = []
-
-        actions_this_game, states_this_game = [], []
-
         step_rewards, deception_rewards = [], []
-
-        actions_this_game = []
+        actions_this_game, states_this_game = [], []
         opponent_obs_history = []
-        states_this_game = []
+
+        cumulative_reward = {"player_0": 0, "player_1": 0}
 
         for name in env.agent_iter():
             obs, rew, term, trunc, _ = env.last()
-            
+            mask = obs["action_mask"]
+            state = obs["observation"]
+            cumulative_reward[name] += rew
             if term or trunc:
                 env.step(None)
                 continue
-            else:
-                mask = obs["action_mask"]
-                state = obs["observation"]
-              
-            
-                if name == "player_0":
-                    # use last known opponent observation
-                    if opponent_obs_history:
-                        # Take last N observations, e.g., 10
-                        history_len = 10
-                        recent_obs = opponent_obs_history[-history_len:]
-                        # Pad if less than N
-                        if len(recent_obs) < history_len:
-                            padding = [torch.zeros_like(torch.tensor(recent_obs[0]))] * (history_len - len(recent_obs))
-                            recent_obs = padding + recent_obs
-                        opponent_obs_seq = torch.stack([torch.as_tensor(obs, dtype=torch.float32) for obs in recent_obs])
-
-                    else:
-                        opponent_obs_seq = None
-                    hole_cards, community_cards = decode_cards(state)
-                    bluff_score = estimate_bluff_score(hole_cards, community_cards)
-                    action, log_prob, value = agent.get_action(state, mask, opponent_model, opponent_obs_seq)
-                    
-                    if bluff_score < 0.25 and action in [3, 4]:
-                        rew += 0.2
-                    step_rewards.append(rew)
-
-                    deception_rewards.append(
-
-                    compute_deception_reward(obs=state, action=action, final_reward=rew)
-
-                )
-                    log_probs.append(log_prob)
-                    values.append(value)
-                    actions_this_game.append(action)
-                    states_this_game.append(state)
-                    if action != 0:  # reward aggression
-                        rew += 0.1
+            if name == "player_0":
+                # Opponent observation history
+                if opponent_obs_history:
+                    history_len = 10
+                    recent_obs = opponent_obs_history[-history_len:]
+                    if len(recent_obs) < history_len:
+                        padding = [torch.zeros_like(torch.tensor(recent_obs[0]))] * (history_len - len(recent_obs))
+                        recent_obs = padding + recent_obs
+                    opponent_obs_seq = torch.stack([torch.tensor(o, dtype=torch.float32) for o in recent_obs])
                 else:
-                    action, _, _ = opponent.get_action(state, mask)
-                    opponent_obs_history.append(state)
-  # store for use by player_0
+                    opponent_obs_seq = None
 
-                
+                hole_cards, community_cards = decode_cards(state)
+                bluff_score = estimate_bluff_score(hole_cards, community_cards)
 
-                # track only opponent actions (name is player_1)
+                action, log_prob, value = agent.get_action(state, mask, opponent_model, opponent_obs_seq)
+
+                if bluff_score < 0.25 and action in [3, 4]:
+                    rew += 0.2  # bluffing bonus
+                if action != 0:
+                    rew += 0.1  # aggression reward
+
+                step_rewards.append(rew)
+                deception_rewards.append(compute_deception_reward(obs=state, action=action, final_reward=rew))
+                log_probs.append(log_prob)
+                values.append(value)
+                actions_this_game.append(action)
+                states_this_game.append(state)
+
+            else:
+                action, _, _ = opponent.get_action(state, mask)
+                opponent_obs_history.append(state)
+
                 if name == "player_1":
                     tracker.observe(state, action)
-                elif name == "player_0":
-                    batch = tracker.build_batch()
-      
-                    if batch:
-                        loss = tracker.train_step(batch)
-                        if ep % 1000 == 0:
-                            print(f"Episode {ep}: Opponent model loss = {loss['total_loss']:.4f}")
-                    tracker.reset()
+
+       
             env.step(action)
-            
+
+        # Final training + logging
         if log_probs:
             total_deception = sum(deception_rewards)
             if total_deception > 0:
                 print(f"[Ep {ep}] Deception Bonus: +{total_deception:.2f}")
             combined_rewards = [r + d for r, d in zip(step_rewards, deception_rewards)]
             agent.update(log_probs, values, combined_rewards)
-            if isinstance(opponent, MediumOpponent):
+
+            if isinstance(opponent, (MediumOpponent, StrongOpponent)):
                 opponent.agent.update(log_probs, values, combined_rewards)
 
-            if isinstance(opponent, StrongOpponent):
-                opponent.agent.update(log_probs, values, combined_rewards)
+        # Opponent model training at end of episode
+        batch = tracker.build_batch()
+        if batch:
+            loss = tracker.train_step(batch)
+            if ep % 1000 == 0:
+                print(f"Episode {ep}: Opponent model loss = {loss['total_loss']:.4f}")
+        tracker.reset()
+
+        # Optional: log cumulative reward
+        print(f"[Ep {ep}] Final cumulative reward: Player 0: {cumulative_reward['player_0']}, Player 1: {cumulative_reward['player_1']}")
 
 
         # === Win/loss tracking using true rewards ===

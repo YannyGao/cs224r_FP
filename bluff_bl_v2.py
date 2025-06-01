@@ -1,3 +1,4 @@
+
 # i just copy paste a huge part of the code because i dont wanna change the orirginal one. 
 import torch
 import torch.nn as nn
@@ -15,10 +16,12 @@ import random
 
 
 # Constants
-OBSERVATION_SPACE_SIZE = 54 + 1
+NUM_PLAYERS = 2
+OBSERVATION_SPACE_SIZE = 54 + NUM_PLAYERS - 1
 ACTION_SPACE_SIZE = 5
 HIDDEN_LAYER_SIZE = 32
 CPU = "cpu"
+
 
 # PettingZoo action map: Action Index	Meaning
             # 0	Fold
@@ -70,6 +73,25 @@ class BaselineAgent:
         self.optimizer = optim.Adam(self.policy.parameters(), lr=alpha)
 
     def get_action(self, obs, mask, opponent_model=None, opponent_obs=None):
+        if opponent_model is not None and opponent_obs is not None:
+            if opponent_obs.dim() == 2:
+                opp_tensor = opponent_obs.unsqueeze(0)  # (1, seq_len, input_dim)
+            else:
+                opp_tensor = opponent_obs  # already with batch dim
+        
+        
+            opp_pred = torch.softmax(opponent_model(opp_tensor)['action_logits'], dim=-1).squeeze()
+            if not isinstance(obs, torch.Tensor):
+                obs = torch.tensor(obs, dtype=torch.float32)
+
+            likely_opp_action = torch.argmax(opp_pred)  # tensor scalar
+            likely_opp_action = likely_opp_action.unsqueeze(0)  # shape [1]
+
+            obs = torch.cat((obs, likely_opp_action), dim=0)
+        else:
+            obs = torch.tensor(obs, dtype=torch.float32)  # Ensure it's a torch tensor
+            zero = torch.tensor([0.0], dtype=torch.float32)  # 1D tensor with 0
+            obs = torch.cat((obs, zero), dim=0)
         obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
         logits, value = self.policy(obs_tensor)
         probs = torch.softmax(logits, dim=-1).squeeze()
@@ -84,53 +106,42 @@ class BaselineAgent:
         else:
             masked_probs /= sum_probs
 
-        # --- Opponent Model-Aware Bluffing ---
       
-        if opponent_model and opponent_obs is not None:
-            if opponent_obs.dim() == 2:
-                opp_tensor = opponent_obs.unsqueeze(0)  # (1, seq_len, input_dim)
-            else:
-                opp_tensor = opponent_obs  # already with batch dim
-            print
-            
-            opp_pred = torch.softmax(opponent_model(opp_tensor)['action_logits'], dim=-1).squeeze()
+        
+            # # If opponent likely to fold and we can raise, bluff
+            # if likely_opp_action == 0:  # Opponent fold
+            #     bluffable_actions = [a for a in [2, 3, 4] if mask[a] == 1]
+            #     if bluffable_actions:
+            #         probs = torch.tensor([0.4, 0.3, 0.3])[:len(bluffable_actions)]
+            #         probs /= probs.sum()
+            #         chosen = torch.multinomial(probs, 1).item()
+            #         action = bluffable_actions[chosen]
+            #         print(f"[Bluff based on opponent folding] Predicted={likely_opp_action} → Bluff action {action}")
+            #         return action, torch.log(masked_probs[action]), value.squeeze()
 
-            likely_opp_action = torch.argmax(opp_pred).item()
-            
-            # If opponent likely to fold and we can raise, bluff
-            if likely_opp_action == 0:  # Opponent fold
-                bluffable_actions = [a for a in [2, 3, 4] if mask[a] == 1]
-                if bluffable_actions:
-                    probs = torch.tensor([0.4, 0.3, 0.3])[:len(bluffable_actions)]
-                    probs /= probs.sum()
-                    chosen = torch.multinomial(probs, 1).item()
-                    action = bluffable_actions[chosen]
-                    print(f"[Bluff based on opponent folding] Predicted={likely_opp_action} → Bluff action {action}")
-                    return action, torch.log(masked_probs[action]), value.squeeze()
-
-            # If opponent likely to be aggressive, fold if allowed
-            if likely_opp_action in [2, 3, 4] and mask[0] == 1:
-                print(f"[Avoid Aggressive Opponent] Predicted={likely_opp_action} → FOLD")
-                return 0, torch.log(masked_probs[0]), value.squeeze()
+            # # If opponent likely to be aggressive, fold if allowed
+            # if likely_opp_action in [2, 3, 4] and mask[0] == 1:
+            #     print(f"[Avoid Aggressive Opponent] Predicted={likely_opp_action} → FOLD")
+            #     return 0, torch.log(masked_probs[0]), value.squeeze()
 
    
 
         # --- Evaluator-based bluff override ---
-        try:
-            hole_cards, community_cards = decode_cards(obs)
-            bluff_score = estimate_bluff_score(hole_cards, community_cards)
+        # try:
+        #     hole_cards, community_cards = decode_cards(obs)
+        #     bluff_score = estimate_bluff_score(hole_cards, community_cards)
 
-            if bluff_score > 0.8:
-                aggr_actions = [i for i in [4, 3, 2] if mask[i] == 1]
-                if aggr_actions:
-                    probs = torch.tensor([bluff_score**(4 - i) for i in aggr_actions])
-                    probs /= probs.sum()
-                    choice = torch.multinomial(probs, 1).item()
-                    action = aggr_actions[choice]
-                    print(f"[Bluff Override] bluff_score={bluff_score:.2f} → sampled aggressive action {action}")
-                    return action, torch.log(masked_probs[action]), value.squeeze()
-        except Exception as e:
-            print(f"[Bluff Eval Error] {e}")
+        #     if bluff_score > 0.8:
+        #         aggr_actions = [i for i in [4, 3, 2] if mask[i] == 1]
+        #         if aggr_actions:
+        #             probs = torch.tensor([bluff_score**(4 - i) for i in aggr_actions])
+        #             probs /= probs.sum()
+        #             choice = torch.multinomial(probs, 1).item()
+        #             action = aggr_actions[choice]
+        #             print(f"[Bluff Override] bluff_score={bluff_score:.2f} → sampled aggressive action {action}")
+        #             return action, torch.log(masked_probs[action]), value.squeeze()
+        # except Exception as e:
+        #     print(f"[Bluff Eval Error] {e}")
 
         # --- Default policy sampling ---
         action_dist = torch.distributions.Categorical(masked_probs)
@@ -162,10 +173,15 @@ class BaselineAgent:
         self.optimizer.step()
 
 def train_bluffing_baseline(episodes=10000):
-    env = texas_holdem_no_limit_v6.env(render_mode="ansi", num_players=2)
+    
+    env = texas_holdem_no_limit_v6.env(render_mode="ansi", num_players=NUM_PLAYERS)
     agent = BaselineAgent()
     opponent = BaselineAgent()
-    opponent_model = OpponentModel(OBSERVATION_SPACE_SIZE, 32, ACTION_SPACE_SIZE)
+    opponent_models = []
+    # for i in range(NUM_PLAYERS):
+    #     opponent_model = OpponentModel(OBSERVATION_SPACE_SIZE, 32, ACTION_SPACE_SIZE)
+    #     opponent_models.append(opponent_model)
+    opponent_model =  OpponentModel(OBSERVATION_SPACE_SIZE - NUM_PLAYERS + 1, 32, ACTION_SPACE_SIZE)
     tracker = OpponentTracker(opponent_model)
 
     for ep in range(1, episodes + 1):
@@ -178,7 +194,10 @@ def train_bluffing_baseline(episodes=10000):
 
         for name in env.agent_iter():
             obs, rew, term, trunc, _ = env.last()
-            
+            print(f"player {rew}")
+            if name == "player_0":
+                episode_reward += rew
+                print(f"episode reward player_0 {rew}")
             if term or trunc:
                 env.step(None)
                 continue
@@ -215,7 +234,7 @@ def train_bluffing_baseline(episodes=10000):
                     opponent_obs_history.append(state)
   # store for use by player_0
 
-                env.step(action)
+                
 
                 # track only opponent actions (name is player_1)
                 if name == "player_1":
@@ -229,10 +248,11 @@ def train_bluffing_baseline(episodes=10000):
                             print(f"Episode {ep}: Opponent model loss = {loss['total_loss']:.4f}")
                     tracker.reset()
 
-                  
-            if name == "player_0":
-                episode_reward += rew
               
+            if name == "player_0":
+                print(f"episode reward player_0 {rew}")
+                episode_reward += rew
+            env.step(action)
         if log_probs:
             deception_bonus = sum(
                 compute_deception_reward(obs=state, action=act, final_reward=episode_reward)
