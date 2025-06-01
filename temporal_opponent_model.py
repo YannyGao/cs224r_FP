@@ -1,125 +1,98 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-import numpy as np
-from collections import deque
-from typing import List, Tuple, Optional, Dict
-import math
 from transformer import PositionalEncoding, MultiHeadAttention
-class TemporalOpponentModel(nn.Module):
+
+class OpponentModel(nn.Module):
     """
-    Advanced opponent model with LSTM + Attention for temporal pattern recognition
+    Transformer-only opponent model - simpler and more effective for poker
     """
     def __init__(self, obs_dim: int, hidden_dim: int, act_dim: int, 
-                 num_layers: int = 2, num_heads: int = 8, dropout: float = 0.1):
+                 num_heads: int = 4, num_layers: int = 2, dropout: float = 0.1):
         super().__init__()
         
         self.obs_dim = obs_dim
         self.hidden_dim = hidden_dim
         self.act_dim = act_dim
-        self.num_layers = num_layers
         
-        # Input embedding
-        self.input_embedding = nn.Linear(obs_dim, hidden_dim)
+        # Input projection
+        self.input_proj = nn.Linear(obs_dim, hidden_dim)
         
-        # LSTM for sequential modeling
-        self.lstm = nn.LSTM(
-            input_size=hidden_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0,
-            bidirectional=False
-        )
-        
-        # Attention mechanism
-        self.attention = MultiHeadAttention(hidden_dim, num_heads, dropout)
-        self.attention_norm = nn.LayerNorm(hidden_dim)
-        
-        # Positional encoding for attention
+        # Positional encoding
         self.pos_encoding = PositionalEncoding(hidden_dim)
         
-        # Output heads for multi-task learning
-        self.action_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, act_dim)
-        )
+        # Stack of transformer blocks
+        self.transformer_blocks = nn.ModuleList([
+            TransformerBlock(hidden_dim, num_heads, dropout)
+            for _ in range(num_layers)
+        ])
         
-        self.hand_strength_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, 1)
-        )
+        # Output heads - what we want to predict about opponent
+        self.action_head = nn.Linear(hidden_dim, act_dim)          # What will they do?
+        self.aggression_head = nn.Linear(hidden_dim, 1)            # How aggressive are they?
+        self.bluff_tendency_head = nn.Linear(hidden_dim, 1)        # Do they bluff often?
+        self.confidence_head = nn.Linear(hidden_dim, 1)            # How confident is our prediction?
         
-        self.aggression_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, 1)
-        )
-        
-        self.bluff_tendency_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, 1)
-        )
-        
-        # Confidence head - how confident the model is in its predictions
-        self.confidence_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, 1)
-        )
-        
-    def forward(self, obs_sequence, return_attention=False):
+    def forward(self, obs_sequence):
         """
         Args:
-            obs_sequence: [batch_size, seq_len, obs_dim]
-            return_attention: whether to return attention weights
-        
+            obs_sequence: [batch_size, seq_len, obs_dim] - opponent's recent actions
         Returns:
-            Dict of predictions and optionally attention weights
+            Dictionary of predictions about opponent's next move
         """
+        print(obs_sequence.shape)
         batch_size, seq_len, _ = obs_sequence.shape
         
-        # Input embedding
-        embedded = self.input_embedding(obs_sequence)  # [batch, seq_len, hidden_dim]
+        # Project to hidden dimension
+        x = self.input_proj(obs_sequence)  # [batch, seq_len, hidden_dim]
         
-        # LSTM processing
-        lstm_out, (h_n, c_n) = self.lstm(embedded)  # [batch, seq_len, hidden_dim]
+        # Add positional encoding
+        x = x.transpose(0, 1)  # [seq_len, batch, hidden_dim]
+        x = self.pos_encoding(x)
+        x = x.transpose(0, 1)  # [batch, seq_len, hidden_dim]
         
-        # Add positional encoding for attention
-        lstm_out_transposed = lstm_out.transpose(0, 1)  # [seq_len, batch, hidden_dim]
-        lstm_out_with_pos = self.pos_encoding(lstm_out_transposed)
-        lstm_out_with_pos = lstm_out_with_pos.transpose(0, 1)  # [batch, seq_len, hidden_dim]
+        # Pass through transformer blocks
+        for block in self.transformer_blocks:
+            x = block(x)
         
-        # Self-attention
-        attended_out, attention_weights = self.attention(
-            lstm_out_with_pos, lstm_out_with_pos, lstm_out_with_pos
-        )
+        # Use last timestep for prediction (most recent context)
+        final_hidden = x[:, -1, :]  # [batch, hidden_dim]
         
-        # Residual connection and layer norm
-        attended_out = self.attention_norm(attended_out + lstm_out)
-        
-        # Use the last timestep for predictions
-        final_hidden = attended_out[:, -1, :]  # [batch, hidden_dim]
-        
-        # Multi-task outputs
+        # Make predictions
         predictions = {
-            'action_logits': F.log_softmax(self.action_head(final_hidden), dim=-1),
-            'hand_strength': torch.sigmoid(self.hand_strength_head(final_hidden)),
+            'action_probs': F.softmax(self.action_head(final_hidden), dim=-1),
             'aggression': torch.sigmoid(self.aggression_head(final_hidden)),
             'bluff_tendency': torch.sigmoid(self.bluff_tendency_head(final_hidden)),
             'confidence': torch.sigmoid(self.confidence_head(final_hidden))
         }
         
-        if return_attention:
-            predictions['attention_weights'] = attention_weights
-            
         return predictions
+
+
+class TransformerBlock(nn.Module):
+    """Single transformer block with self-attention + feed-forward"""
+    def __init__(self, hidden_dim, num_heads, dropout):
+        super().__init__()
+        
+        self.attention = MultiHeadAttention(hidden_dim, num_heads, dropout)
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        
+        # Feed-forward network
+        self.ffn = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 4),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * 4, hidden_dim),
+            nn.Dropout(dropout)
+        )
+        self.norm2 = nn.LayerNorm(hidden_dim)
+        
+    def forward(self, x):
+        # Self-attention with residual connection
+        attended, _ = self.attention(x, x, x)
+        x = self.norm1(x + attended)
+        
+        # Feed-forward with residual connection  
+        x = self.norm2(x + self.ffn(x))
+        
+        return x

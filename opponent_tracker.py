@@ -23,7 +23,7 @@ class OpponentTracker:
         obs_batch, action_batch = zip(*self.buffer)
         obs_batch = torch.stack(obs_batch)
         action_batch = torch.tensor(action_batch)
-
+        print(obs_batch.shape, action_batch.shape)
         self.optimizer.zero_grad()
         log_probs = self.model(obs_batch)
         loss = self.loss_fn(log_probs, action_batch)
