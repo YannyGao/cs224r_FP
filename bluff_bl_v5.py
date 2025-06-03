@@ -80,84 +80,31 @@ class BaselineAgent:
 
     def get_action(self, obs, mask, opponent_model=None, opponent_obs=None):
         likely_opp_action = None
+
+        # Add predicted opponent action if available
         if opponent_model is not None and opponent_obs is not None:
-            if opponent_obs.dim() == 2:
-                opp_tensor = opponent_obs.unsqueeze(0)  # (1, seq_len, input_dim)
-            else:
-                opp_tensor = opponent_obs  # already with batch dim
-        
-        
+            opp_tensor = opponent_obs.unsqueeze(0) if opponent_obs.dim() == 2 else opponent_obs
             opp_pred = torch.softmax(opponent_model(opp_tensor)['action_logits'], dim=-1).squeeze()
-            if not isinstance(obs, torch.Tensor):
-                obs = torch.tensor(obs, dtype=torch.float32)
-
-            likely_opp_action = torch.argmax(opp_pred).item()   # tensor scalar
- # shape [1]
-
-            obs = torch.cat((obs, torch.tensor([likely_opp_action], dtype=torch.float32)), dim=0)
+            likely_opp_action = torch.argmax(opp_pred).item()
+            obs = torch.tensor(obs, dtype=torch.float32)
+            obs = torch.cat((obs, torch.tensor([likely_opp_action], dtype=torch.float32)))
         else:
-            if not isinstance(obs, torch.Tensor):
-                obs = torch.tensor(obs, dtype=torch.float32)# Ensure it's a torch tensor
-            zero = torch.tensor([0.0], dtype=torch.float32)  # 1D tensor with 0
-            obs = torch.cat((obs, zero), dim=0)
-        obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+            obs = torch.tensor(obs, dtype=torch.float32)
+            obs = torch.cat((obs, torch.tensor([0.0])))
+
+        # Get logits and value
+        obs_tensor = obs.unsqueeze(0)
         logits, value = self.policy(obs_tensor)
-        probs = torch.softmax(logits, dim=-1).squeeze()
-        mask_tensor = torch.tensor(mask, dtype=torch.float32)
-        masked_probs = probs * mask_tensor
-        sum_probs = masked_probs.sum()
 
-        if sum_probs.item() == 0 or torch.isnan(sum_probs):
-            valid_indices = (mask_tensor == 1).nonzero(as_tuple=True)[0]
-            masked_probs = torch.zeros_like(mask_tensor)
-            masked_probs[valid_indices] = 1.0 / len(valid_indices)
-        else:
-            masked_probs /= sum_probs
-
-      
-        
-            # # If opponent likely to fold and we can raise, bluff
-            # if likely_opp_action == 0:  # Opponent fold
-            #     bluffable_actions = [a for a in [2, 3, 4] if mask[a] == 1]
-            #     if bluffable_actions:
-            #         probs = torch.tensor([0.4, 0.3, 0.3])[:len(bluffable_actions)]
-            #         probs /= probs.sum()
-            #         chosen = torch.multinomial(probs, 1).item()
-            #         action = bluffable_actions[chosen]
-            #         print(f"[Bluff based on opponent folding] Predicted={likely_opp_action} → Bluff action {action}")
-            #         return action, torch.log(masked_probs[action]), value.squeeze()
-
-            # # If opponent likely to be aggressive, fold if allowed
-            # if likely_opp_action in [2, 3, 4] and mask[0] == 1:
-            #     print(f"[Avoid Aggressive Opponent] Predicted={likely_opp_action} → FOLD")
-            #     return 0, torch.log(masked_probs[0]), value.squeeze()
-
-   
-
-        # --- Evaluator-based bluff override ---
-        # try:
-        #     hole_cards, community_cards = decode_cards(obs)
-        #     bluff_score = estimate_bluff_score(hole_cards, community_cards)
-
-        #     if bluff_score > 0.8:
-        #         aggr_actions = [i for i in [4, 3, 2] if mask[i] == 1]
-        #         if aggr_actions:
-        #             probs = torch.tensor([bluff_score**(4 - i) for i in aggr_actions])
-        #             probs /= probs.sum()
-        #             choice = torch.multinomial(probs, 1).item()
-        #             action = aggr_actions[choice]
-        #             print(f"[Bluff Override] bluff_score={bluff_score:.2f} → sampled aggressive action {action}")
-        #             return action, torch.log(masked_probs[action]), value.squeeze()
-        # except Exception as e:
-        #     print(f"[Bluff Eval Error] {e}")
-
-        # --- Default policy sampling ---
-        logits, value = self.policy(obs_tensor)
-        mask_tensor = torch.tensor(mask, dtype=torch.bool)
-        m = CategoricalMasked(logits, mask_tensor)
+        # Safe sampling with CategoricalMasked
+        m = CategoricalMasked(logits, mask)
         action = m.sample()
-        return action.item(), m.log_prob(action), value.squeeze(), likely_opp_action
 
+        # Optional debug: catch illegal samples
+        if not mask[action.item()]:
+            print(f"[WARNING] Sampled illegal action: {action.item()}")
+
+        return action.item(), m.log_prob(action), value.squeeze(), likely_opp_action
 
 
 
@@ -248,6 +195,7 @@ def adaptive_opponent_selection(ep, win_loss_stats):
     return WeakOpponent()
 
 def train_bluffing_baseline(episodes=10000):
+    all_bluff_scores = []
     env = texas_holdem_no_limit_v6.env(render_mode="ansi", num_players=NUM_PLAYERS)
     agent = BaselineAgent()
     
@@ -256,6 +204,9 @@ def train_bluffing_baseline(episodes=10000):
     win_loss_stats = defaultdict(lambda: {"wins": 0, "losses": 0, "games": 0})
 
     writer = SummaryWriter(log_dir="runs/bluffing_baseline")
+    total_bluff_attempts = 0
+    total_successful_bluffs = 0
+
     num_succ_bluffs = 0
     accuracies = []
     for ep in range(1, episodes + 1):
@@ -312,6 +263,7 @@ def train_bluffing_baseline(episodes=10000):
                 actions_this_game.append(int(action))
                 states_this_game.append(state)
                 bluff_scores.append(bluff_score)
+                all_bluff_scores.extend(bluff_scores)
 
             else:
                 output = opponent.get_action(state, mask)
@@ -434,6 +386,27 @@ def train_bluffing_baseline(episodes=10000):
                 w, l, g = stats["wins"], stats["losses"], stats["games"]
                 winrate = w / g if g > 0 else 0.0
                 print(f"{opp}: {w}W-{l}L ({winrate:.2%} win rate over {g} games)")
+        bluff_attempts = sum(1 for a, bs in zip(actions_this_game, bluff_scores) if bs > 0.8 and a in [2, 3, 4])
+        successful_bluffs = int(successful_bluff)
+        percent_successful_bluff = (successful_bluffs / bluff_attempts * 100) if bluff_attempts > 0 else 0.0
+        total_bluff_attempts += bluff_attempts
+        total_successful_bluffs += successful_bluffs
+
+    if total_bluff_attempts > 0:
+        overall_bluff_success_rate = total_successful_bluffs / total_bluff_attempts * 100
+        print(f"\n=== Overall Bluff Stats ===")
+        print(f"Total Bluff Attempts: {total_bluff_attempts}")
+        print(f"Total Successful Bluffs: {total_successful_bluffs}")
+        print(f"Overall Bluff Success Rate: {overall_bluff_success_rate:.2f}%")
+    else:
+        print("\nNo bluff attempts recorded.")
+
+    if all_bluff_scores:
+        avg_bluff_score = np.mean(all_bluff_scores)
+        print(f"\n=== Bluff Statistics ===")
+        print(f"Average Bluff Score Across All Steps: {avg_bluff_score:.3f}")
+    else:
+        print("\nNo bluff scores recorded.")
 
     writer.close()
 if __name__ == "__main__":
