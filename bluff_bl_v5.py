@@ -78,6 +78,7 @@ class BaselineAgent:
         self.optimizer = optim.Adam(self.policy.parameters(), lr=alpha)
 
     def get_action(self, obs, mask, opponent_model=None, opponent_obs=None):
+        likely_opp_action = None
         if opponent_model is not None and opponent_obs is not None:
             if opponent_obs.dim() == 2:
                 opp_tensor = opponent_obs.unsqueeze(0)  # (1, seq_len, input_dim)
@@ -89,12 +90,13 @@ class BaselineAgent:
             if not isinstance(obs, torch.Tensor):
                 obs = torch.tensor(obs, dtype=torch.float32)
 
-            likely_opp_action = torch.argmax(opp_pred)  # tensor scalar
-            likely_opp_action = likely_opp_action.unsqueeze(0)  # shape [1]
+            likely_opp_action = torch.argmax(opp_pred).item()   # tensor scalar
+ # shape [1]
 
-            obs = torch.cat((obs, likely_opp_action), dim=0)
+            obs = torch.cat((obs, torch.tensor([likely_opp_action], dtype=torch.float32)), dim=0)
         else:
-            obs = torch.tensor(obs, dtype=torch.float32)  # Ensure it's a torch tensor
+            if not isinstance(obs, torch.Tensor):
+                obs = torch.tensor(obs, dtype=torch.float32)# Ensure it's a torch tensor
             zero = torch.tensor([0.0], dtype=torch.float32)  # 1D tensor with 0
             obs = torch.cat((obs, zero), dim=0)
         obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
@@ -151,7 +153,7 @@ class BaselineAgent:
         # --- Default policy sampling ---
         action_dist = torch.distributions.Categorical(masked_probs)
         action = action_dist.sample()
-        return action.item(), action_dist.log_prob(action), value.squeeze()
+        return action.item(), action_dist.log_prob(action), value.squeeze(), likely_opp_action
 
 
     def update(self, log_probs, values, rewards):
@@ -180,9 +182,10 @@ class BaselineAgent:
 # === Opponent Definitions ===
 class WeakOpponent:
     def get_action(self, obs, mask):
+   
         valid_actions = [i for i, m in enumerate(mask) if m == 1]
         action = random.choice(valid_actions) if valid_actions else 0
-        return action, torch.tensor(0.0), torch.tensor(0.0)
+        return action, torch.tensor(0.0), torch.tensor(0.0), 0
 
 class MediumOpponent:
     def __init__(self, base_agent):
@@ -190,6 +193,7 @@ class MediumOpponent:
 
     def get_action(self, obs, mask):
         return self.agent.get_action(obs, mask)
+        
 
 class StrongOpponent:
     def __init__(self, base_agent):
@@ -197,7 +201,7 @@ class StrongOpponent:
 
     def get_action(self, obs, mask):
         return self.agent.get_action(obs, mask)
-
+        
 # === Adaptive Curriculum ===
 trained_medium_agent = BaselineAgent()
 trained_medium_agent.policy.load_state_dict(torch.load("medium_agent.pth"))
@@ -213,13 +217,13 @@ def adaptive_opponent_selection(ep, win_loss_stats):
     weak_wr = win_loss_stats["WeakOpponent"]["wins"] / max(1, win_loss_stats["WeakOpponent"]["games"])
     medium_wr = win_loss_stats["MediumOpponent"]["wins"] / max(1, win_loss_stats["MediumOpponent"]["games"])
 
-    if weak_wr > 0.70 and win_loss_stats["MediumOpponent"]["games"] < 200:
+    if weak_wr > 0.7 and win_loss_stats["MediumOpponent"]["games"] < 200:
         return MediumOpponent(trained_medium_agent)
 
     if medium_wr > 0.65 and win_loss_stats["StrongOpponent"]["games"] < 200:
         return StrongOpponent(trained_strong_agent)
 
-    if medium_wr > 0.60:
+    if medium_wr > 0.6:
         return MediumOpponent(trained_medium_agent)
 
     return WeakOpponent()
@@ -234,8 +238,10 @@ def train_bluffing_baseline(episodes=10000):
 
     writer = SummaryWriter(log_dir="runs/bluffing_baseline")
     num_succ_bluffs = 0
+    accuracies = []
     for ep in range(1, episodes + 1):
         opponent = adaptive_opponent_selection(ep, win_loss_stats)
+       
         env.reset()
 
         log_probs, values = [], []
@@ -243,6 +249,9 @@ def train_bluffing_baseline(episodes=10000):
         actions_this_game, states_this_game = [], []
         opponent_obs_history = []
         bluff_scores = []
+        pred_actions = []
+        actual_actions = []
+        
 
         cumulative_reward = {"player_0": 0, "player_1": 0}
 
@@ -268,7 +277,8 @@ def train_bluffing_baseline(episodes=10000):
                     opponent_obs_seq = None
 
                 
-                action, log_prob, value = agent.get_action(state, mask, opponent_model, opponent_obs_seq)
+                action, log_prob, value, likely_opp_action = agent.get_action(state, mask, opponent_model, opponent_obs_seq)
+                pred_actions.append(likely_opp_action)
 
                 # if bluff_score > 0.8 and action in [3, 4]:
                 #     rew += 1  # bluffing bonus
@@ -280,20 +290,26 @@ def train_bluffing_baseline(episodes=10000):
                 deception_rewards.append(compute_deception_reward(bluff_score=bluff_score, action=action, bluff_reward=1))
                 log_probs.append(log_prob)
                 values.append(value)
-                actions_this_game.append(action)
+                actions_this_game.append(int(action))
                 states_this_game.append(state)
                 bluff_scores.append(bluff_score)
 
             else:
-                action, _, _ = opponent.get_action(state, mask)
+                output = opponent.get_action(state, mask)
+                if (len(output) == 3):
+                    action, _, _ = output
+                    
+                else:
+                    action, _, _,_ = output
                 opponent_obs_history.append(state)
 
                 if name == "player_1":
                     tracker.observe(state, action)
+                actual_actions.append(action)
 
        
             env.step(action)
-
+       
         # Final training + logging
         
         # Check if final reward was positive (agent won the game)
@@ -314,7 +330,7 @@ def train_bluffing_baseline(episodes=10000):
         final_bluff_bonus = 0.0
         if won_game and successful_bluff:
             final_bluff_bonus = 0.2*final_reward  # tune this value
-            print(f"[Ep {ep}] Successful bluff detected. Extra bonus: +{final_bluff_bonus}")
+            # print(f"[Ep {ep}] Successful bluff detected. Extra bonus: +{final_bluff_bonus}")
 
         # Add final bluff bonus to last step's reward
         if combined_rewards:
@@ -333,10 +349,22 @@ def train_bluffing_baseline(episodes=10000):
 
         # Opponent model training at end of episode
         batch = tracker.build_batch()
+        pred_actions = np.array(pred_actions)
+        actual_actions = np.array(actual_actions)
+
+        min_len = min(len(pred_actions), len(actual_actions))
+        accuracy = np.mean(np.array(pred_actions[:min_len]) == np.array(actual_actions[:min_len]))
+        accuracies.append(accuracy)
+        
+        
         if batch:
             loss = tracker.train_step(batch)
             if ep % 1000 == 0:
                 print(f"Episode {ep}: Opponent model loss = {loss['total_loss']:.4f}")
+                print(len(accuracies))
+                print(f"mean accuracy {sum(accuracies)/len(accuracies)}")
+                
+       
         tracker.reset()
 
         # # Optional: log cumulative reward
