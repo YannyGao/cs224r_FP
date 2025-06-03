@@ -20,8 +20,17 @@ class Policy(nn.Module):
 
 class CategoricalMasked(Categorical):
     def __init__(self, logits, mask):
-        logits = logits.squeeze(0).clone()  # from shape [1, 5] to [5]
-        logits[~mask] = -1e10  # Mask out invalid actions
+        logits = logits.squeeze(0).clone()
+        mask_tensor = torch.tensor(mask, dtype=torch.bool)
+
+        if not mask_tensor.any():
+            raise ValueError(f"[FATAL] No legal actions: {mask_tensor}")
+
+        logits[~mask_tensor] = -1e10
+
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            logits = torch.nan_to_num(logits, nan=-1e10, posinf=1e10, neginf=-1e10)
+
         super().__init__(logits=logits)
 
 
@@ -34,7 +43,8 @@ class Agent:
     def get_action(self, state, mask):
         state = torch.from_numpy(state).float().unsqueeze(0)
         logits = self.policy(state)
-        m = CategoricalMasked(logits, torch.tensor(mask, dtype=torch.bool))
+        mask_tensor = torch.tensor(mask, dtype=torch.bool)
+        m = CategoricalMasked(logits, mask_tensor)
         action = m.sample()
         return action.item(), m.log_prob(action), torch.tensor(0.0)
 

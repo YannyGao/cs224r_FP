@@ -17,7 +17,7 @@ from strong_oppo import Agent as StrongAgent
 
 
 from torch.utils.tensorboard import SummaryWriter
-
+from strong_oppo import StrongOpponent, CategoricalMasked
 import os
 
 # Constants
@@ -37,6 +37,7 @@ CPU = "cpu"
 
 # Evaluate poker hands
 evaluator = Evaluator()
+strong_opponent = StrongOpponent(obs_dim=OBSERVATION_SPACE_SIZE, act_dim=ACTION_SPACE_SIZE)
 
 
 def estimate_bluff_score(hole_cards, community_cards, num_simulations=20):
@@ -151,9 +152,13 @@ class BaselineAgent:
         #     print(f"[Bluff Eval Error] {e}")
 
         # --- Default policy sampling ---
-        action_dist = torch.distributions.Categorical(masked_probs)
-        action = action_dist.sample()
-        return action.item(), action_dist.log_prob(action), value.squeeze(), likely_opp_action
+        logits, value = self.policy(obs_tensor)
+        mask_tensor = torch.tensor(mask, dtype=torch.bool)
+        m = CategoricalMasked(logits, mask_tensor)
+        action = m.sample()
+        return action.item(), m.log_prob(action), value.squeeze(), likely_opp_action
+
+
 
 
     def update(self, log_probs, values, rewards):
@@ -200,7 +205,13 @@ class StrongOpponent:
         self.agent = base_agent
 
     def get_action(self, obs, mask):
-        return self.agent.get_action(obs, mask)
+        action, log_prob, _ = self.agent.get_action(obs, mask)
+        return action, log_prob, torch.tensor(0.0)
+    
+    def update(self, log_probs, rewards):
+        self.agent.update(log_probs, rewards)
+
+        #return self.agent.get_action(obs, mask)
         
 # === Adaptive Curriculum ===
 trained_medium_agent = BaselineAgent()
@@ -210,7 +221,14 @@ trained_medium_agent.policy.eval()
 strong_inner_agent = StrongAgent(obs_dim=54, act_dim=5)
 trained_strong_agent = StrongOpponent(strong_inner_agent)
 
+used_strong_opponent = False
+
 def adaptive_opponent_selection(ep, win_loss_stats):
+    global used_strong_opponent
+
+    if used_strong_opponent:
+        return trained_strong_agent
+
     if win_loss_stats["WeakOpponent"]["games"] < 200:
         return WeakOpponent()
 
@@ -221,7 +239,8 @@ def adaptive_opponent_selection(ep, win_loss_stats):
         return MediumOpponent(trained_medium_agent)
 
     if medium_wr > 0.65 and win_loss_stats["StrongOpponent"]["games"] < 200:
-        return StrongOpponent(trained_strong_agent)
+        used_strong_opponent = True
+        return trained_strong_agent
 
     if medium_wr > 0.6:
         return MediumOpponent(trained_medium_agent)
@@ -251,7 +270,7 @@ def train_bluffing_baseline(episodes=10000):
         bluff_scores = []
         pred_actions = []
         actual_actions = []
-        
+        opponent_log_probs, opponent_rewards = [], []
 
         cumulative_reward = {"player_0": 0, "player_1": 0}
 
@@ -305,6 +324,11 @@ def train_bluffing_baseline(episodes=10000):
 
                 if name == "player_1":
                     tracker.observe(state, action)
+                    if isinstance(opponent, StrongOpponent):
+                        _, log_prob, _ = opponent.get_action(state, mask)
+                        opponent_log_probs.append(log_prob)
+                        opponent_rewards.append(rew)  # or same combined_rewards logic if deception applies
+
                 actual_actions.append(action)
 
        
@@ -345,6 +369,9 @@ def train_bluffing_baseline(episodes=10000):
             #     detached_values = [v.detach() for v in values]
             #     detached_rewards = [r for r in combined_rewards]  # rewards are scalars, no need to detach
             #     opponent.agent.update(detached_log_probs, detached_values, detached_rewards)
+            if isinstance(opponent, StrongOpponent) and opponent_log_probs:
+                opponent.update(opponent_log_probs, opponent_rewards)
+
             pass
 
         # Opponent model training at end of episode
@@ -362,8 +389,8 @@ def train_bluffing_baseline(episodes=10000):
             if ep % 1000 == 0:
                 print(f"Episode {ep}: Opponent model loss = {loss['total_loss']:.4f}")
                 print(len(accuracies))
-                print(f"mean accuracy {sum(accuracies)/len(accuracies)}")
-                
+                if len(accuracies) > 0:
+                    print(f"mean accuracy {np.mean([a for a in accuracies if not np.isnan(a)])}")                
        
         tracker.reset()
 
@@ -391,7 +418,7 @@ def train_bluffing_baseline(episodes=10000):
         writer.add_scalar("Deception/Bonus", total_deception, ep)
         writer.add_scalar("Successful Bluff",successful_bluff , ep)
         if states_this_game:
-            bluff_avg = np.mean(bluff_score)
+            bluff_avg = np.mean(bluff_scores) if bluff_scores else 0.0
             writer.add_scalar("Bluff/AverageScore", bluff_avg, ep)
         for name, stats in win_loss_stats.items():
             if stats["games"] > 0:
@@ -413,16 +440,3 @@ if __name__ == "__main__":
     print("started")
     train_bluffing_baseline(episodes=10000)
  
-'''
-Result is like this:
-Episode 1000: Final Reward = 1, Actions: Counter()
-Episode 2000: Final Reward = 100.3, Actions: Counter({1: 3})
-Episode 3000: Final Reward = 1, Actions: Counter()
-Episode 4000: Final Reward = 1, Actions: Counter()
-Episode 5000: Final Reward = 2.1, Actions: Counter({3: 1})
-Episode 6000: Final Reward = 100.1, Actions: Counter({1: 1})
-Episode 7000: Final Reward = -2, Actions: Counter({0: 1})
-Episode 8000: Final Reward = 4.1, Actions: Counter({4: 1})
-Episode 9000: Final Reward = 1, Actions: Counter()
-Episode 10000: Final Reward = 100.1, Actions: Counter({4: 1})
-'''
