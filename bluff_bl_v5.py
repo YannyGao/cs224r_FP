@@ -198,6 +198,9 @@ class StrongOpponent:
 
 # === Adaptive Curriculum ===
 trained_medium_agent = BaselineAgent()
+trained_medium_agent.policy.load_state_dict(torch.load("medium_agent.pth"))
+trained_medium_agent.policy.eval() 
+
 trained_strong_agent = BaselineAgent()
 
 def adaptive_opponent_selection(ep, win_loss_stats):
