@@ -52,7 +52,7 @@ def compute_deception_reward(bluff_score, action, bluff_reward):
     Calculates deception reward if action was a bluff and resulted in success.
     """
     try:
-        if bluff_score > 0.8 and action in [2, 3, 4]:
+        if bluff_score > 0.6 and action in [2, 3, 4]:
             return bluff_reward
     except Exception as e:
         print(f"[Deception Reward Error] {e}")

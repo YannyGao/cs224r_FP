@@ -233,7 +233,7 @@ def train_bluffing_baseline(episodes=10000):
     win_loss_stats = defaultdict(lambda: {"wins": 0, "losses": 0, "games": 0})
 
     writer = SummaryWriter(log_dir="runs/bluffing_baseline")
-
+    num_succ_bluffs = 0
     for ep in range(1, episodes + 1):
         opponent = adaptive_opponent_selection(ep, win_loss_stats)
         env.reset()
@@ -274,7 +274,7 @@ def train_bluffing_baseline(episodes=10000):
                 #     rew += 1  # bluffing bonus
                 # if action != 0:
                 #     rew += 0.1  # aggression reward
-                hole_cards, community_cards = decode_cards(obs)
+                hole_cards, community_cards = decode_cards(state)
                 bluff_score = estimate_bluff_score(hole_cards, community_cards)
                 step_rewards.append(rew)
                 deception_rewards.append(compute_deception_reward(bluff_score=bluff_score, action=action, bluff_reward=1))
@@ -297,6 +297,10 @@ def train_bluffing_baseline(episodes=10000):
         # Final training + logging
         
         # Check if final reward was positive (agent won the game)
+        total_deception = sum(deception_rewards)
+        # if total_deception > 0:
+        #         print(f"[Ep {ep}] Deception Bonus: +{total_deception:.2f}")
+        combined_rewards = [r + d for r, d in zip(step_rewards, deception_rewards)]
         final_reward = cumulative_reward["player_0"]
         won_game = final_reward > 0
 
@@ -304,6 +308,7 @@ def train_bluffing_baseline(episodes=10000):
         for a, bs in zip(actions_this_game, bluff_scores):
             if bs > 0.8 and a in [2, 3, 4]:  # aggressive action
                 successful_bluff = True
+                num_succ_bluffs += 1
                 break
             
         final_bluff_bonus = 0.0
@@ -316,12 +321,9 @@ def train_bluffing_baseline(episodes=10000):
             combined_rewards[-1] += final_bluff_bonus
 
         if log_probs:
-            total_deception = sum(deception_rewards)
-            if total_deception > 0:
-                print(f"[Ep {ep}] Deception Bonus: +{total_deception:.2f}")
-            combined_rewards = [r + d for r, d in zip(step_rewards, deception_rewards)]
+            
             agent.update(log_probs, values, combined_rewards)
-
+            # print(combined_rewards[:8])
             # if isinstance(opponent, (MediumOpponent, StrongOpponent)):
             #     detached_log_probs = [lp.detach() for lp in log_probs]
             #     detached_values = [v.detach() for v in values]
@@ -337,8 +339,8 @@ def train_bluffing_baseline(episodes=10000):
                 print(f"Episode {ep}: Opponent model loss = {loss['total_loss']:.4f}")
         tracker.reset()
 
-        # Optional: log cumulative reward
-        print(f"[Ep {ep}] Final cumulative reward: Player 0: {cumulative_reward['player_0']}, Player 1: {cumulative_reward['player_1']}")
+        # # Optional: log cumulative reward
+        # print(f"[Ep {ep}] Final cumulative reward: Player 0: {cumulative_reward['player_0']}, Player 1: {cumulative_reward['player_1']}")
 
 
         # === Win/loss tracking using true rewards ===
@@ -354,10 +356,14 @@ def train_bluffing_baseline(episodes=10000):
 
         # === TensorBoard Logging ===
         total_reward = sum(step_rewards) + sum(deception_rewards)
+        # if total_reward > 0:
+        #     print(ep)
+      
         writer.add_scalar("Reward/Total", total_reward, ep)
         writer.add_scalar("Deception/Bonus", total_deception, ep)
+        writer.add_scalar("Successful Bluff",successful_bluff , ep)
         if states_this_game:
-            bluff_avg = np.mean([s[-1] for s in states_this_game])
+            bluff_avg = np.mean(bluff_score)
             writer.add_scalar("Bluff/AverageScore", bluff_avg, ep)
         for name, stats in win_loss_stats.items():
             if stats["games"] > 0:
