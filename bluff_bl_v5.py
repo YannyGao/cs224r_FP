@@ -13,6 +13,8 @@ from collections import Counter, defaultdict
 from opponent_tracker_simp import OpponentModel, OpponentTracker
 from treys import Deck, Evaluator, Card
 import random
+from strong_oppo import Agent as StrongAgent
+
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -201,7 +203,8 @@ trained_medium_agent = BaselineAgent()
 trained_medium_agent.policy.load_state_dict(torch.load("medium_agent.pth"))
 trained_medium_agent.policy.eval() 
 
-trained_strong_agent = BaselineAgent()
+strong_inner_agent = StrongAgent(obs_dim=54, act_dim=5)
+trained_strong_agent = StrongOpponent(strong_inner_agent)
 
 def adaptive_opponent_selection(ep, win_loss_stats):
     if win_loss_stats["WeakOpponent"]["games"] < 200:
@@ -213,7 +216,7 @@ def adaptive_opponent_selection(ep, win_loss_stats):
     if weak_wr > 0.70 and win_loss_stats["MediumOpponent"]["games"] < 200:
         return MediumOpponent(trained_medium_agent)
 
-    if medium_wr > 0.72 and win_loss_stats["StrongOpponent"]["games"] < 200:
+    if medium_wr > 0.65 and win_loss_stats["StrongOpponent"]["games"] < 200:
         return StrongOpponent(trained_strong_agent)
 
     if medium_wr > 0.60:

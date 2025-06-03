@@ -1,0 +1,68 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.distributions import Categorical
+from torch import optim
+import numpy as np
+from collections import deque
+
+class Policy(nn.Module):
+    def __init__(self, obs_dim, act_dim, hidden_dim=32):
+        super().__init__()
+        self.fc1 = nn.Linear(obs_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.output = nn.Linear(hidden_dim, act_dim)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        return self.output(x)
+
+class CategoricalMasked(Categorical):
+    def __init__(self, logits, mask):
+        logits = logits.squeeze(0).clone()  # from shape [1, 5] to [5]
+        logits[~mask] = -1e10  # Mask out invalid actions
+        super().__init__(logits=logits)
+
+
+class Agent:
+    def __init__(self, obs_dim, act_dim, alpha=1e-2, gamma=0.99, hidden_dim=32):
+        self.gamma = gamma
+        self.policy = Policy(obs_dim, act_dim, hidden_dim)
+        self.optimizer = optim.Adam(self.policy.parameters(), lr=alpha)
+
+    def get_action(self, state, mask):
+        state = torch.from_numpy(state).float().unsqueeze(0)
+        logits = self.policy(state)
+        m = CategoricalMasked(logits, torch.tensor(mask, dtype=torch.bool))
+        action = m.sample()
+        return action.item(), m.log_prob(action), torch.tensor(0.0)
+
+
+    def update(self, log_probs, rewards):
+        returns = deque()
+        G = 0
+        for r in reversed(rewards):
+            G = r + self.gamma * G
+            returns.appendleft(G)
+        returns = torch.tensor(list(returns), dtype=torch.float32)
+
+        log_probs = torch.stack(log_probs)
+        eps = np.finfo(np.float32).eps.item()
+        returns = (returns - returns.mean()) / (returns.std() + eps)
+
+        loss = -(log_probs * returns).sum()
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+
+class StrongOpponent:
+    def __init__(self, obs_dim, act_dim):
+        self.agent = Agent(obs_dim, act_dim)
+
+    def get_action(self, state, mask):
+        return self.agent.get_action(state, mask)
+
+    def update(self, log_probs, rewards):
+        self.agent.update(log_probs, rewards)
