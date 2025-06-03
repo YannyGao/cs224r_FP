@@ -270,8 +270,8 @@ def train_bluffing_baseline(episodes=10000):
 
                 action, log_prob, value = agent.get_action(state, mask, opponent_model, opponent_obs_seq)
 
-                if bluff_score < 0.25 and action in [3, 4]:
-                    rew += 0.2  # bluffing bonus
+                if bluff_score > 0.8 and action in [3, 4]:
+                    rew += 1  # bluffing bonus
                 if action != 0:
                     rew += 0.1  # aggression reward
 
