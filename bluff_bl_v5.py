@@ -242,6 +242,7 @@ def train_bluffing_baseline(episodes=10000):
         step_rewards, deception_rewards = [], []
         actions_this_game, states_this_game = [], []
         opponent_obs_history = []
+        bluff_scores = []
 
         cumulative_reward = {"player_0": 0, "player_1": 0}
 
@@ -250,6 +251,7 @@ def train_bluffing_baseline(episodes=10000):
             mask = obs["action_mask"]
             state = obs["observation"]
             cumulative_reward[name] += rew
+            
             if term or trunc:
                 env.step(None)
                 continue
@@ -265,22 +267,22 @@ def train_bluffing_baseline(episodes=10000):
                 else:
                     opponent_obs_seq = None
 
-                hole_cards, community_cards = decode_cards(state)
-                bluff_score = estimate_bluff_score(hole_cards, community_cards)
-
+                
                 action, log_prob, value = agent.get_action(state, mask, opponent_model, opponent_obs_seq)
 
-                if bluff_score > 0.8 and action in [3, 4]:
-                    rew += 1  # bluffing bonus
-                if action != 0:
-                    rew += 0.1  # aggression reward
-
+                # if bluff_score > 0.8 and action in [3, 4]:
+                #     rew += 1  # bluffing bonus
+                # if action != 0:
+                #     rew += 0.1  # aggression reward
+                hole_cards, community_cards = decode_cards(obs)
+                bluff_score = estimate_bluff_score(hole_cards, community_cards)
                 step_rewards.append(rew)
-                deception_rewards.append(compute_deception_reward(obs=state, action=action, final_reward=rew))
+                deception_rewards.append(compute_deception_reward(bluff_score=bluff_score, action=action, bluff_reward=1))
                 log_probs.append(log_prob)
                 values.append(value)
                 actions_this_game.append(action)
                 states_this_game.append(state)
+                bluff_scores.append(bluff_score)
 
             else:
                 action, _, _ = opponent.get_action(state, mask)
@@ -293,6 +295,26 @@ def train_bluffing_baseline(episodes=10000):
             env.step(action)
 
         # Final training + logging
+        
+        # Check if final reward was positive (agent won the game)
+        final_reward = cumulative_reward["player_0"]
+        won_game = final_reward > 0
+
+        successful_bluff = False
+        for a, bs in zip(actions_this_game, bluff_scores):
+            if bs > 0.8 and a in [2, 3, 4]:  # aggressive action
+                successful_bluff = True
+                break
+            
+        final_bluff_bonus = 0.0
+        if won_game and successful_bluff:
+            final_bluff_bonus = 0.2*final_reward  # tune this value
+            print(f"[Ep {ep}] Successful bluff detected. Extra bonus: +{final_bluff_bonus}")
+
+        # Add final bluff bonus to last step's reward
+        if combined_rewards:
+            combined_rewards[-1] += final_bluff_bonus
+
         if log_probs:
             total_deception = sum(deception_rewards)
             if total_deception > 0:

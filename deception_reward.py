@@ -47,22 +47,13 @@ def estimate_bluff_score(hole_cards, community_cards, num_simulations=20):
             wins += 1
     return wins / num_simulations
 
-def compute_deception_reward(obs, action, final_reward, aggressive_threshold=0.8, aggressive_actions={2, 3, 4}):
+def compute_deception_reward(bluff_score, action, bluff_reward):
     """
     Calculates deception reward if action was a bluff and resulted in success.
     """
     try:
-        hole_cards, community_cards = decode_cards(obs)
-        bluff_score = 1.0 - estimate_bluff_score(hole_cards, community_cards)
-        if bluff_score < 0.3 and action in [2, 3, 4]:
-            if final_reward > 0:  # Only reward successful bluffs
-                print(f"[Bluff Detected] Score={bluff_score:.2f}, Action={action}, Final Reward={final_reward}")
-                return 0.1
-
-        if bluff_score >= aggressive_threshold and action in aggressive_actions and final_reward > 0:
-            # Agent bluffed and succeeded
-            
-            return 0.2 * final_reward  # tunable shaping factor
+        if bluff_score > 0.8 and action in [2, 3, 4]:
+            return bluff_reward
     except Exception as e:
         print(f"[Deception Reward Error] {e}")
     return 0.0
