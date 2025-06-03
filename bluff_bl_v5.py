@@ -207,7 +207,7 @@ def adaptive_opponent_selection(ep, win_loss_stats):
     weak_wr = win_loss_stats["WeakOpponent"]["wins"] / max(1, win_loss_stats["WeakOpponent"]["games"])
     medium_wr = win_loss_stats["MediumOpponent"]["wins"] / max(1, win_loss_stats["MediumOpponent"]["games"])
 
-    if weak_wr > 0.75 and win_loss_stats["MediumOpponent"]["games"] < 200:
+    if weak_wr > 0.70 and win_loss_stats["MediumOpponent"]["games"] < 200:
         return MediumOpponent(trained_medium_agent)
 
     if medium_wr > 0.72 and win_loss_stats["StrongOpponent"]["games"] < 200:
@@ -294,8 +294,12 @@ def train_bluffing_baseline(episodes=10000):
             combined_rewards = [r + d for r, d in zip(step_rewards, deception_rewards)]
             agent.update(log_probs, values, combined_rewards)
 
-            if isinstance(opponent, (MediumOpponent, StrongOpponent)):
-                opponent.agent.update(log_probs, values, combined_rewards)
+            # if isinstance(opponent, (MediumOpponent, StrongOpponent)):
+            #     detached_log_probs = [lp.detach() for lp in log_probs]
+            #     detached_values = [v.detach() for v in values]
+            #     detached_rewards = [r for r in combined_rewards]  # rewards are scalars, no need to detach
+            #     opponent.agent.update(detached_log_probs, detached_values, detached_rewards)
+            pass
 
         # Opponent model training at end of episode
         batch = tracker.build_batch()
