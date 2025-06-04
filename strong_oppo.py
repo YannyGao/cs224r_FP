@@ -43,7 +43,13 @@ class Agent:
     def get_action(self, state, mask):
         state = torch.from_numpy(state).float().unsqueeze(0)
         logits = self.policy(state)
-        mask_tensor = torch.tensor(mask, dtype=torch.bool)
+        mask_tensor = mask.clone().detach() if isinstance(mask, torch.Tensor) else torch.tensor(mask, dtype=torch.bool)
+
+        if not any(mask):
+            # Fallback: always pick 'fold'
+            action = 0
+            return action, torch.tensor(0.0), torch.tensor(0.0)
+
         m = CategoricalMasked(logits, mask_tensor)
         action = m.sample()
         return action.item(), m.log_prob(action), torch.tensor(0.0)
