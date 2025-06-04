@@ -159,6 +159,7 @@ class StrongOpponent:
         action, log_prob, _ = self.agent.get_action(obs, mask)
         return action, log_prob, torch.tensor(0.0)
     
+    
     def update(self, log_probs, rewards):
         self.agent.update(log_probs, rewards)
 
@@ -298,12 +299,10 @@ def train_bluffing_baseline(episodes=10000):
                 all_bluff_scores.extend(bluff_scores)
 
             else:
-                output = opponent.get_action(state, mask)
-                if (len(output) == 3):
-                    action, _, _ = output
-                    
-                else:
-                    action, _, _,_ = output
+                # Ensure mask is a list of ints or bools (torch.tensor(mask) in strong_oppo expects this)
+                mask_clean = [bool(m) for m in mask]  # or: list(map(bool, mask))
+                action, _, _, *_ = opponent.get_action(state, mask_clean)
+
                 opponent_obs_history.append(state)
 
                 if name == "player_1":
@@ -352,8 +351,10 @@ def train_bluffing_baseline(episodes=10000):
             
             agent.update(log_probs, values, combined_rewards)
          
-            if isinstance(opponent, StrongOpponent) and opponent_log_probs:
-                opponent.update(opponent_log_probs, opponent_rewards)
+            mask_clean = [bool(m) for m in mask]  # normalize mask
+            if isinstance(opponent, StrongOpponent):
+                action, _, _, *_ = opponent.get_action(state, mask_clean)
+                opponent_log_probs.append(log_prob)
 
             pass
 
