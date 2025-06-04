@@ -428,5 +428,5 @@ def train_bluffing_baseline(episodes=10000):
     writer.close()
 if __name__ == "__main__":
     print("started")
-    train_bluffing_baseline(episodes=10000)
+    train_bluffing_baseline(episodes=50000)
  
