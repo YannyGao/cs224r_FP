@@ -199,8 +199,15 @@ def train_bluffing_baseline(episodes=10000):
     env = texas_holdem_no_limit_v6.env(render_mode="ansi", num_players=NUM_PLAYERS)
     agent = BaselineAgent()
     
-    opponent_model = OpponentModel(OBSERVATION_SPACE_SIZE - NUM_PLAYERS + 1, 32, ACTION_SPACE_SIZE)
-    tracker = OpponentTracker(opponent_model)
+    opponent_models = {
+    "WeakOpponent": OpponentModel(OBSERVATION_SPACE_SIZE - NUM_PLAYERS + 1, 32, ACTION_SPACE_SIZE),
+    "MediumOpponent": OpponentModel(OBSERVATION_SPACE_SIZE - NUM_PLAYERS + 1, 32, ACTION_SPACE_SIZE),
+    "StrongOpponent": OpponentModel(OBSERVATION_SPACE_SIZE - NUM_PLAYERS + 1, 32, ACTION_SPACE_SIZE),
+}
+    trackers = {
+        k: OpponentTracker(v) for k, v in opponent_models.items()
+    }
+
     win_loss_stats = defaultdict(lambda: {"wins": 0, "losses": 0, "games": 0})
 
     writer = SummaryWriter(log_dir="runs/bluffing_baseline")
@@ -209,8 +216,13 @@ def train_bluffing_baseline(episodes=10000):
 
     num_succ_bluffs = 0
     accuracies = []
+    accuracies_by_type = defaultdict(list)
+
     for ep in range(1, episodes + 1):
         opponent = adaptive_opponent_selection(ep, win_loss_stats)
+        opponent_type = type(opponent).__name__
+        opponent_model = opponent_models[opponent_type]
+        tracker = trackers[opponent_type]
        
         env.reset()
 
@@ -332,18 +344,23 @@ def train_bluffing_baseline(episodes=10000):
         actual_actions = np.array(actual_actions)
 
         min_len = min(len(pred_actions), len(actual_actions))
-        accuracy = np.mean(np.array(pred_actions[:min_len]) == np.array(actual_actions[:min_len]))
-        accuracies.append(accuracy)
-        
+        accuracy = np.mean(pred_actions[:min_len] == actual_actions[:min_len])
+
+        if not np.isnan(accuracy):
+            opp_name = type(opponent).__name__
+            accuracies_by_type[opp_name].append(accuracy)
+            writer.add_scalar(f"OpponentModel/Accuracy_{opp_name}", accuracy, ep)
+
         
         if batch:
             loss = tracker.train_step(batch)
             if ep % 1000 == 0:
-                print(f"Episode {ep}: Opponent model loss = {loss['total_loss']:.4f}")
-                print(len(accuracies))
-                if len(accuracies) > 0:
-                    print(f"mean accuracy {np.mean([a for a in accuracies if not np.isnan(a)])}")                
-       
+                print(f"\n[Accuracy Stats @ Ep {ep}]")
+                for opp_name, accs in accuracies_by_type.items():
+                    if accs:
+                        mean_acc = np.mean(accs)
+                        print(f"{opp_name}: {mean_acc:.3f}")
+
         tracker.reset()
 
         # # Optional: log cumulative reward
