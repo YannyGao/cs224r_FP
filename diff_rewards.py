@@ -185,7 +185,7 @@ def train_bluffing_baseline(episodes=10000):
     # add others if needed
 )
 
-def train_bluffing_baseline(episodes=10000):
+def train_bluffing_baseline(episodes=10000, bluff_reward=1):
     main_agent_stats = init_stats_counters()
     opponent_stats = init_stats_counters()
     previous_feedback, stats_before, stats_after = None, None, None
@@ -300,7 +300,7 @@ def train_bluffing_baseline(episodes=10000):
                 all_bluff_scores.extend(bluff_scores)
 
                 step_rewards.append(rew)
-                deception_rewards.append(compute_deception_reward(bluff_score=bluff_score, action=action, bluff_reward=1))
+                deception_rewards.append(compute_deception_reward(bluff_score=bluff_score, action=action, bluff_reward=bluff_reward))
                 log_probs.append(log_prob)
                 values.append(value)
                 actions_this_game.append(int(action))
@@ -513,7 +513,15 @@ def update_stats_on_hand_corrected(stats, preflop_actions, actions, went_to_show
         
         if went_to_showdown:
             stats["hands_went_to_showdown"] += 1
+import argparse 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train poker agent with configurable bluff reward')
+    parser.add_argument('--br', type=float, default=1.0,
+                       help='Reward multiplier for successful bluffs (default: 1.0)')
+    return parser.parse_args()
 
 if __name__ == "__main__":
     print("started")
-    train_bluffing_baseline(episodes=10000)
+    args = parse_args()
+    print(f"Starting training with bluff reward: {args.br}")
+    train_bluffing_baseline(episodes=10000, bluff_reward=args.br)
