@@ -460,10 +460,10 @@ def train_bluffing_baseline(episodes=10000, bluff_reward=1):
             print(f"Opponent Stats: VPIP={opponent_agg_stats['VPIP']:.1f}%, PFR={opponent_agg_stats['PFR']:.1f}%, AFq={opponent_agg_stats['AFq']:.1f}%")
             
             try: 
-                os.makedirs("checkpoints_8", exist_ok=True)
-                torch.save(agent.policy.state_dict(), f"checkpoints_8/main_agent_ep{ep}.pt")
+                os.makedirs(f"br_{bluff_reward}", exist_ok=True)
+                torch.save(agent.policy.state_dict(), f"br_{bluff_reward}/main_agent_ep{ep}.pt")
                 if opponent_type == "StrongAgent":
-                    torch.save(opponent.policy.state_dict(), f"checkpoints_8/opponent_ep{ep}.pt")
+                    torch.save(opponent.policy.state_dict(), f"br_{bluff_reward}/opponent_ep{ep}.pt")
             except:
                 print("coudn't save")
 
