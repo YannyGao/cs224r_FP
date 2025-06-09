@@ -86,23 +86,31 @@ class BaselineAgent:
         self.policy = PolicyWithValue(OBSERVATION_SPACE_SIZE, ACTION_SPACE_SIZE, HIDDEN_LAYER_SIZE)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=alpha)
 
-    def get_action(self, obs, mask, opponent_model=None, opponent_obs=None, feedback_embedding=None):
-        obs = torch.tensor(obs, dtype=torch.float32)
+    def get_action(self, obs, mask, opponent_model=None, opponent_obs=None):
+        likely_opp_action = None
 
+        # Add predicted opponent action if available
         if opponent_model is not None and opponent_obs is not None:
             opp_tensor = opponent_obs.unsqueeze(0) if opponent_obs.dim() == 2 else opponent_obs
             opp_pred = torch.softmax(opponent_model(opp_tensor)['action_logits'], dim=-1).squeeze()
             likely_opp_action = torch.argmax(opp_pred).item()
+            obs = torch.tensor(obs, dtype=torch.float32)
+            obs = torch.cat((obs, torch.tensor([likely_opp_action], dtype=torch.float32)))
         else:
-            likely_opp_action = 0
+            obs = torch.tensor(obs, dtype=torch.float32)
+            obs = torch.cat((obs, torch.tensor([0.0])))
 
-        obs = torch.cat((obs, torch.tensor([likely_opp_action], dtype=torch.float32)))
-            
-    
-        logits, value = self.policy(obs.unsqueeze(0))
-        
+        # Get logits and value
+        obs_tensor = obs.unsqueeze(0)
+        logits, value = self.policy(obs_tensor)
+
+        # Safe sampling with CategoricalMasked
         m = CategoricalMasked(logits, mask)
         action = m.sample()
+
+        # Optional debug: catch illegal samples
+        if not mask[action.item()]:
+            print(f"[WARNING] Sampled illegal action: {action.item()}")
 
         return action.item(), m.log_prob(action), value.squeeze(), likely_opp_action
 
@@ -131,11 +139,13 @@ class BaselineAgent:
         total_loss.backward()
         self.optimizer.step()
         
+# === Opponent Definitions ===
 class WeakOpponent:
     def get_action(self, obs, mask):
+   
         valid_actions = [i for i, m in enumerate(mask) if m == 1]
         action = random.choice(valid_actions) if valid_actions else 0
-        return action, torch.tensor(0.0), torch.tensor(0.0)
+        return action, torch.tensor(0.0), torch.tensor(0.0), 0
 
 class MediumOpponent:
     def __init__(self, base_agent):
@@ -143,37 +153,54 @@ class MediumOpponent:
 
     def get_action(self, obs, mask):
         return self.agent.get_action(obs, mask)
+        
 
 class StrongOpponent:
     def __init__(self, base_agent):
         self.agent = base_agent
 
     def get_action(self, obs, mask):
-        return self.agent.get_action(obs, mask)
+        action, log_prob, _ = self.agent.get_action(obs, mask)
+        return action, log_prob, torch.tensor(0.0)
+    
+    def update(self, log_probs, rewards):
+        self.agent.update(log_probs, rewards)
 
+        #return self.agent.get_action(obs, mask)
+        
 # === Adaptive Curriculum ===
 trained_medium_agent = BaselineAgent()
-trained_strong_agent = BaselineAgent()
+trained_medium_agent.policy.load_state_dict(torch.load("medium_agent.pth"))
+trained_medium_agent.policy.eval() 
+
+strong_inner_agent = StrongAgent(obs_dim=54, act_dim=5)
+trained_strong_agent = StrongOpponent(strong_inner_agent)
+
+used_strong_opponent = False
 
 def adaptive_opponent_selection(ep, win_loss_stats):
+    global used_strong_opponent
+
+    if used_strong_opponent:
+        return trained_strong_agent
+
     if win_loss_stats["WeakOpponent"]["games"] < 200:
         return WeakOpponent()
 
     weak_wr = win_loss_stats["WeakOpponent"]["wins"] / max(1, win_loss_stats["WeakOpponent"]["games"])
     medium_wr = win_loss_stats["MediumOpponent"]["wins"] / max(1, win_loss_stats["MediumOpponent"]["games"])
 
-    if weak_wr > 0.75 and win_loss_stats["MediumOpponent"]["games"] < 200:
+    if weak_wr > 0.7 and win_loss_stats["MediumOpponent"]["games"] < 200:
         return MediumOpponent(trained_medium_agent)
 
-    if medium_wr > 0.72 and win_loss_stats["StrongOpponent"]["games"] < 200:
-        return StrongOpponent(trained_strong_agent)
+    if medium_wr > 0.65 and win_loss_stats["StrongOpponent"]["games"] < 200:
+        used_strong_opponent = True
+        return trained_strong_agent
 
-    if medium_wr > 0.60:
+    if medium_wr > 0.6:
         return MediumOpponent(trained_medium_agent)
 
     return WeakOpponent()
-
-
 
 def train_bluffing_baseline(episodes=10000):
     from stats import (
@@ -462,8 +489,9 @@ def train_bluffing_baseline(episodes=10000, bluff_reward=1):
             try: 
                 os.makedirs(f"br_{bluff_reward}", exist_ok=True)
                 torch.save(agent.policy.state_dict(), f"br_{bluff_reward}/main_agent_ep{ep}.pt")
-                if opponent_type == "StrongAgent":
-                    torch.save(opponent.policy.state_dict(), f"br_{bluff_reward}/opponent_ep{ep}.pt")
+                if isinstance(opponent, StrongOpponent):
+                    torch.save(opponent.agent.policy.state_dict(), f"br_{bluff_reward}/strong_opponent_ep{ep}.pt")
+
             except:
                 print("coudn't save")
 
@@ -477,10 +505,6 @@ def train_bluffing_baseline(episodes=10000, bluff_reward=1):
         percent_successful_bluff = (successful_bluffs / bluff_attempts * 100) if bluff_attempts > 0 else 0.0
         total_bluff_attempts += bluff_attempts
         total_successful_bluffs += successful_bluffs
-
-       
-        
-        
    
     writer.close()
 
