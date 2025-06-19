@@ -1,5 +1,5 @@
 
-### Bluffing with Precision: LLM-Guided Strategy and Opponent Modeling in Multi-Agent Poker
+# Bluffing with Precision: LLM-Guided Strategy and Opponent Modeling in Multi-Agent Poker
 
 ## Motivation
 Poker is a game where players must make decisions without knowing all information,
