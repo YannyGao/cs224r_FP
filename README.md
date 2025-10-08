@@ -1,6 +1,10 @@
 
 # Bluffing with Precision: LLM-Guided Strategy and Opponent Modeling in Multi-Agent Poker
 
+## Project Deliverable
+- [Poster](cs224rposter.pdf)
+- [Final Report](cs224rFinalProject-3.pdf)
+
 ## Motivation
 Poker is a game where players must make decisions without knowing all information,
 requiring strategic thinking and deception. Current AI poker systems like DeepStack work well but
