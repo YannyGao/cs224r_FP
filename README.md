@@ -1,7 +1,7 @@
 
 # Bluffing with Precision: LLM-Guided Strategy and Opponent Modeling in Multi-Agent Poker
 
-## Project Deliverable
+## Project Deliverables
 - [Poster](cs224rposter.pdf)
 - [Final Report](cs224rFinalProject-3.pdf)
 
